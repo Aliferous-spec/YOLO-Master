@@ -55,11 +55,17 @@ lora_r: 8 # (int) LoRA rank (0 to disable)
 lora_alpha: 16 # (int) LoRA alpha
 lora_dropout: 0.05 # (float) LoRA dropout
 lora_bias: "none" # (str) LoRA bias type: "none", "all", "lora_only"
+lora_backend: "auto" # (str) LoRA backend: "auto", "peft", "fallback"
+lora_variant: "lora" # (str) Adapter variant: "lora", "loha", "dora"
+lora_include_head: False # (bool) Include YOLO detection head layers in LoRA targeting
+lora_freeze_bn: False # (bool) Freeze BatchNorm layers during LoRA training
 lora_target_modules: ["linear", "conv"] # (list[str], optional) LoRA target modules
 lora_save_adapters: True # (bool) Save LoRA adapters
 lora_adapter_dir: "lora_adapter" # (str) Directory name for adapters
 lora_auto_r_ratio: 0.0 # (float) Auto calculate LoRA rank based on params ratio
 lora_use_dora: False # (bool) Enable DoRA (Weight-Decomposed Low-Rank Adaptation)
+lora_use_rslora: True # (bool) Enable RS-LoRA scaling for better high-rank stability
+lora_init_lora_weights: "pissa" # (str) LoRA init mode: "default", "gaussian", "pissa", "olora"
 lora_type: "lora" # (str) PEFT type: "lora", "loha", "lokr"
 lora_quantization: "none" # (str) Quantization type: "none", "4bit", "8bit" (Requires bitsandbytes)
 lora_include_moe: False # (bool) Include MoE layers in auto-detection

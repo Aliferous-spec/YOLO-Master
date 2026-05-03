@@ -1,6 +1,7 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 import sys
+from types import SimpleNamespace
 from unittest import mock
 
 import torch
@@ -8,9 +9,10 @@ import torch
 from tests import MODEL
 from ultralytics import YOLO
 from ultralytics.cfg import get_cfg
+from ultralytics.engine import trainer as trainer_module
 from ultralytics.engine.exporter import Exporter
 from ultralytics.models.yolo import classify, detect, segment
-from ultralytics.utils import ASSETS, DEFAULT_CFG, WEIGHTS_DIR
+from ultralytics.utils import ASSETS, DEFAULT_CFG, WEIGHTS_DIR, YAML
 
 
 def test_func(*args):
@@ -25,6 +27,70 @@ def test_export():
     assert test_func in exporter.callbacks["on_export_start"], "callback test failed"
     f = exporter(model=YOLO("yolo11n.yaml").model)
     YOLO(f)(ASSETS)  # exported model inference
+
+
+def test_save_trainer_args_yaml_persists_runtime_lora_total_step(tmp_path):
+    """Test that saved trainer args reflect runtime-updated AdaLoRA total_step."""
+    args = SimpleNamespace(augmentations=None, lora_total_step=7, save_dir=str(tmp_path))
+
+    trainer_module.save_trainer_args_yaml(tmp_path, args)
+
+    saved = YAML.load(tmp_path / "args.yaml")
+    assert saved["lora_total_step"] == 7
+
+
+def test_save_trainer_args_yaml_serializes_augmentations_repr(tmp_path):
+    """Test that saved trainer args serialize augmentation objects via repr for resumability."""
+
+    class _DummyAug:
+        def __repr__(self):
+            return "DummyAug(p=0.5)"
+
+    args = SimpleNamespace(augmentations=[_DummyAug()], lora_total_step=1, save_dir=str(tmp_path))
+
+    trainer_module.save_trainer_args_yaml(tmp_path, args)
+
+    saved = YAML.load(tmp_path / "args.yaml")
+    assert saved["augmentations"] == ["DummyAug(p=0.5)"]
+
+
+def test_save_trainer_args_yaml_persists_effective_lora_backend(tmp_path):
+    args = SimpleNamespace(
+        augmentations=None,
+        lora_total_step=7,
+        requested_lora_backend="auto",
+        effective_lora_backend="fallback",
+        requested_lora_init_lora_weights="pissa",
+        effective_lora_init_lora_weights="gaussian",
+        save_dir=str(tmp_path),
+    )
+
+    trainer_module.save_trainer_args_yaml(tmp_path, args)
+
+    saved = YAML.load(tmp_path / "args.yaml")
+    assert saved["requested_lora_backend"] == "auto"
+    assert saved["effective_lora_backend"] == "fallback"
+    assert saved["requested_lora_init_lora_weights"] == "pissa"
+    assert saved["effective_lora_init_lora_weights"] == "gaussian"
+
+
+def test_update_args_with_lora_runtime_metadata_sets_requested_and_effective_fields():
+    args = SimpleNamespace()
+    model = SimpleNamespace(
+        lora_runtime_metadata={
+            "requested_backend": "auto",
+            "effective_backend": "fallback",
+            "requested_init_lora_weights": "pissa",
+            "effective_init_lora_weights": "gaussian",
+        }
+    )
+
+    trainer_module.update_args_with_lora_runtime_metadata(args, model)
+
+    assert args.requested_lora_backend == "auto"
+    assert args.effective_lora_backend == "fallback"
+    assert args.requested_lora_init_lora_weights == "pissa"
+    assert args.effective_lora_init_lora_weights == "gaussian"
 
 
 def test_detect():

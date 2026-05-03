@@ -86,6 +86,17 @@ def test_load_lora_delegates_to_adapter_loader(tmp_path):
         load_mock.assert_called_once_with(model.model, tmp_path / "lora_adapter", merge=False)
 
 
+def test_save_lora_only_supports_fallback_backend(tmp_path):
+    """Test that fallback-backed adapters still use the shared save utility."""
+    model = YOLO(MODEL)
+    model.trainer = mock.Mock()
+    model.trainer.model = mock.Mock(lora_enabled=True, lora_backend="fallback")
+
+    with mock.patch("ultralytics.utils.lora.save_lora_adapters", return_value=True) as save_mock:
+        assert model.save_lora_only(tmp_path / "fallback_adapter")
+        save_mock.assert_called_once_with(model.trainer.model, tmp_path / "fallback_adapter")
+
+
 def test_model_profile():
     """Test profiling of the YOLO model with `profile=True` to assess performance and resource usage."""
     from ultralytics.nn.tasks import DetectionModel

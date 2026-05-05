@@ -21,13 +21,13 @@ from ultralytics.nn.tasks import (
 try:
     from peft import (
         LoraConfig, LoHaConfig, LoKrConfig, AdaLoraConfig,
-        IA3Config, OFTConfig, BOFTConfig,
+        IA3Config, OFTConfig, BOFTConfig, HRAConfig,
         get_peft_model, PeftModel
     )
     PEFT_AVAILABLE = True
 except ImportError:
     LoraConfig = LoHaConfig = LoKrConfig = AdaLoraConfig = None
-    IA3Config = OFTConfig = BOFTConfig = None
+    IA3Config = OFTConfig = BOFTConfig = HRAConfig = None
     get_peft_model = PeftModel = None
     PEFT_AVAILABLE = False
     
@@ -1123,11 +1123,20 @@ class LoRAConfig:
     use_dora: bool = False # Enable DoRA (Weight-Decomposed Low-Rank Adaptation)
     use_rslora: bool = True # Enable Rank-Stabilized LoRA scaling (alpha / sqrt(r))
     init_lora_weights: Union[str, bool] = True # LoRA init mode: True/False for std init, or "gaussian"/"pissa"/"olora"
-    peft_type: str = "lora" # Options: "lora", "loha", "lokr", "adalora", "ia3", "oft", "boft"
+    peft_type: str = "lora" # Options: "lora", "loha", "lokr", "adalora", "ia3", "oft", "boft", "hra"
     quantization: str = "none" # Options: "none", "4bit", "8bit" (Requires bitsandbytes)
     only_3x3: bool = False # Skip 1x1 convs during auto target selection
 
-    # OFT / BOFT specific (ignored for other variants)
+    # Training strategy parameters (synced with default.yaml)
+    layer_decay: float = 0.0 # Layer-wise LR decay rate (0=disabled)
+    alpha_warmup: int = 0 # Alpha cosine warmup epochs (0=disabled)
+    ortho_weight: float = 0.0 # Orthogonal regularization weight (0=disabled)
+    ortho_frequency: int = 10 # Compute orthogonal loss every N batches
+    dropout_end: float = 0.15 # Final dropout for dynamic schedule
+    dropout_start_ratio: float = 0.3 # When to start increasing dropout (fraction of total epochs)
+
+    # HRA specific (only used when peft_type=hra)
+    hra_apply_gs: bool = False  # HRA: apply Gram-Schmidt orthogonalization
     oft_block_size: int = 0          # OFT: block size (>0 overrides r)
     oft_coft: bool = False           # OFT: use constrained (Cayley-Neumann) rotations
     oft_eps: float = 6e-5            # OFT: numerical eps
@@ -1261,6 +1270,12 @@ class LoRAConfig:
             "peft_type": "lora_type",
             "quantization": "lora_quantization",
             "only_3x3": "lora_only_3x3",
+            "layer_decay": "lora_layer_decay",
+            "alpha_warmup": "lora_alpha_warmup",
+            "ortho_weight": "lora_ortho_weight",
+            "ortho_frequency": "lora_ortho_frequency",
+            "dropout_end": "lora_dropout_end",
+            "dropout_start_ratio": "lora_dropout_start_ratio",
             "oft_block_size": "lora_oft_block_size",
             "oft_coft": "lora_oft_coft",
             "oft_eps": "lora_oft_eps",
@@ -1268,6 +1283,8 @@ class LoRAConfig:
             "boft_block_size": "lora_boft_block_size",
             "boft_block_num": "lora_boft_block_num",
             "boft_n_butterfly_factor": "lora_boft_n_butterfly_factor",
+            # HRA
+            "hra_apply_gs": "lora_hra_apply_gs",
             "target_r": "lora_target_r",
             "init_r": "lora_init_r",
             "tinit": "lora_tinit",
@@ -1623,7 +1640,7 @@ class LoRAConfigBuilder:
         peft_type: str = "lora",
         **kwargs
     ) -> Union['LoraConfig', 'LoHaConfig', 'LoKrConfig',
-               'IA3Config', 'OFTConfig', 'BOFTConfig', None]:
+               'IA3Config', 'OFTConfig', 'BOFTConfig', 'HRAConfig', None]:
         """Factory method: Generates a PEFT Config object."""
         
         targets = kwargs.get('target_modules')
@@ -1860,6 +1877,20 @@ class LoRAConfigBuilder:
                 modules_to_save=kwargs.get("modules_to_save"),
             )
 
+        elif peft_type == "hra":
+            # HRA: High Rank Adaptation with Gram-Schmidt orthogonalization.
+            # Supports both Conv2d and Linear. apply_GS enables Gram-Schmidt
+            # for better numerical stability at higher ranks.
+            return HRAConfig(
+                r=r,
+                apply_GS=bool(kwargs.get("hra_apply_gs", False)),
+                target_modules=common_kwargs["target_modules"],
+                exclude_modules=common_kwargs.get("exclude_modules"),
+                init_weights=bool(kwargs.get("init_lora_weights", True)),
+                bias=kwargs.get("bias", "none"),
+                modules_to_save=kwargs.get("modules_to_save"),
+            )
+
         else: # Default to LoRA (and DoRA)
             lora_kwargs = {
                 "lora_alpha": alpha,
@@ -2068,6 +2099,7 @@ def apply_lora(
         "boft_block_size": getattr(config, "boft_block_size", 4),
         "boft_block_num": getattr(config, "boft_block_num", 0),
         "boft_n_butterfly_factor": getattr(config, "boft_n_butterfly_factor", 2),
+        "hra_apply_gs": getattr(config, "hra_apply_gs", False),
         "target_r": config.target_r,
         "init_r": config.init_r,
         "tinit": config.tinit,

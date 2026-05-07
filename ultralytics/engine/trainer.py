@@ -43,6 +43,8 @@ from ultralytics.utils import (
 from ultralytics.utils.autobatch import check_train_batch_size
 from ultralytics.utils.lora import (
     LoraTrainingStrategy,
+    _is_adapter_param,
+    _unfreeze_detection_head,
     apply_lora,
     get_lora_training_stats,
     resolve_adalora_total_step,
@@ -459,17 +461,7 @@ class BaseTrainer:
 
         # Unfreeze detection head in LoRA mode (PEFT freezes all by default)
         if is_lora:
-            head_unfrozen = 0
-            for name, param in self.model.named_parameters():
-                if any(k in name for k in ("detect", "cv2", "cv3", "dfl")):
-                    if not param.requires_grad:
-                        param.requires_grad = True
-                        head_unfrozen += param.numel()
-            if head_unfrozen > 0:
-                LOGGER.info(
-                    f"[LoRA] 🔓 Unfrozen {head_unfrozen:,} detection head parameters "
-                    f"(detect/cv2/cv3/dfl) due to class-mismatch re-initialization."
-                )
+            _unfreeze_detection_head(self.model)
 
         # Check AMP
         self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
@@ -1763,7 +1755,7 @@ class BaseTrainer:
         """
         # LoRA-aware parameter group separation
         lora_lr_mult = getattr(self.args, "lora_lr_mult", 1.0)
-        has_lora_param = any("lora_" in n for n, _ in model.named_parameters())
+        has_lora_param = any(_is_adapter_param(n) for n, _ in model.named_parameters())
         
         g = [], [], [], [], []  # 5 groups: [base_wt, bn_wt, bias, router, lora]
         bn = tuple(v for k, v in nn.__dict__.items() if "Norm" in k)  # normalization layers, i.e. BatchNorm2d()
@@ -1783,7 +1775,7 @@ class BaseTrainer:
                 fullname = f"{module_name}.{param_name}" if module_name else param_name
                 if "routing" in fullname or "router" in fullname:  # MoE Router parameters
                     g[3].append(param)
-                elif "lora_" in fullname:  # LoRA adapter params -> separate group
+                elif _is_adapter_param(fullname):  # Adapter params (LoRA/LoHa/LoKr/OFT/BOFT/IA3/HRA) -> separate group
                     g[4].append(param)
                 elif "bias" in fullname:  # bias (no decay)
                     g[2].append(param)

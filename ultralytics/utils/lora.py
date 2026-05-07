@@ -52,6 +52,59 @@ def _is_adapter_param(name: str) -> bool:
     """Check if a parameter name belongs to a PEFT adapter (any supported variant)."""
     return any(p in name for p in _PEFT_ADAPTER_PREFIXES)
 
+
+@dataclass
+class ParamStats:
+    """Immutable parameter statistics for a model."""
+
+    total: int = 0
+    trainable: int = 0
+    frozen: int = 0
+    adapter: int = 0
+
+    @property
+    def trainable_pct(self) -> float:
+        return 100 * self.trainable / self.total if self.total > 0 else 0.0
+
+    @property
+    def adapter_pct(self) -> float:
+        return 100 * self.adapter / self.total if self.total > 0 else 0.0
+
+    @property
+    def base_total(self) -> int:
+        return self.total - self.adapter
+
+
+def _compute_param_stats(model: nn.Module) -> ParamStats:
+    """Count total/trainable/frozen/adapter parameters in a single pass."""
+    stats = ParamStats()
+    for name, param in model.named_parameters():
+        n = param.numel()
+        stats.total += n
+        if param.requires_grad:
+            stats.trainable += n
+        else:
+            stats.frozen += n
+        if _is_adapter_param(name):
+            stats.adapter += n
+    return stats
+
+
+def _unfreeze_detection_head(model: nn.Module) -> int:
+    """Unfreeze detection head parameters (detect/cv2/cv3/dfl). Returns count of unfrozen params."""
+    head_unfrozen = 0
+    for name, param in model.named_parameters():
+        if any(k in name for k in ("detect", "cv2", "cv3", "dfl")):
+            if not param.requires_grad:
+                param.requires_grad = True
+                head_unfrozen += param.numel()
+    if head_unfrozen > 0:
+        LOGGER.info(
+            f"[LoRA] 🔓 Unfrozen {head_unfrozen:,} detection head parameters "
+            f"(detect/cv2/cv3/dfl) due to class-mismatch re-initialization."
+        )
+    return head_unfrozen
+
 def _fast_parse_int_list(value: Any) -> Optional[List[int]]:
     """
     High-performance integer list parser.
@@ -779,18 +832,7 @@ def apply_manual_lora(model: nn.Module, config: "LoRAConfig", include_head: bool
         target_modules=model.lora_target_modules,
     )
 
-    # Unfreeze detection head (may be frozen by trainer or random init)
-    head_unfrozen = 0
-    for name, param in model.named_parameters():
-        if any(k in name for k in ("detect", "cv2", "cv3", "dfl")):
-            if not param.requires_grad:
-                param.requires_grad = True
-                head_unfrozen += param.numel()
-    if head_unfrozen > 0:
-        LOGGER.info(
-            f"[LoRA] 🔓 Unfrozen {head_unfrozen:,} detection head parameters "
-            f"(detect/cv2/cv3/dfl) due to class-mismatch re-initialization."
-        )
+    _unfreeze_detection_head(model)
 
     return model
 
@@ -2295,18 +2337,7 @@ def apply_lora(
         raise e
 
     # Unfreeze detection head (may be frozen by PEFT or random init)
-    head_unfrozen = 0
-    for name, param in model.named_parameters():
-        if any(k in name for k in ("detect", "cv2", "cv3", "dfl")):
-            if not param.requires_grad:
-                param.requires_grad = True
-                head_unfrozen += param.numel()
-
-    if head_unfrozen > 0:
-        LOGGER.info(
-            f"[LoRA] 🔓 Unfrozen {head_unfrozen:,} detection head parameters "
-            f"(detect/cv2/cv3/dfl) due to class-mismatch re-initialization."
-        )
+    _unfreeze_detection_head(model)
 
     # 6. Gradient Checkpointing (VRAM Optimization) - Actually activate
     if config.gradient_checkpointing:
@@ -2400,32 +2431,20 @@ def _get_mps_memory() -> tuple:
 
 def _print_param_stats(model: nn.Module):
     """Prints detailed parameter statistics."""
-    trainable_params = 0
-    all_params = 0
-    lora_params = 0
-    frozen_base = 0
+    s = _compute_param_stats(model)
 
-    for name, param in model.named_parameters():
-        all_params += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
-        else:
-            frozen_base += param.numel()
-        if _is_adapter_param(name):
-            lora_params += param.numel()
+    LOGGER.info(
+        f"[LoRA] 📊 Stats: "
+        f"Trainable: {s.trainable:,} ({s.trainable_pct:.3f}%) | "
+        f"Frozen Base: {s.frozen:,} | "
+        f"Adapter Params: {s.adapter:,} ({s.adapter_pct:.3f}%) | "
+        f"Base Total: {s.base_total:,}"
+    )
 
-    pct = 100 * trainable_params / all_params if all_params > 0 else 0
-    lora_pct = 100 * lora_params / all_params if all_params > 0 else 0
-    base_total = all_params - lora_params
-    
-    LOGGER.info(f"[LoRA] 📊 Stats: "
-                f"Trainable: {trainable_params:,} ({pct:.3f}%) | "
-                f"Frozen Base: {frozen_base:,} | "
-                f"Adapter Params: {lora_params:,} ({lora_pct:.3f}%) | "
-                f"Base Total: {base_total:,}")
-
-    if trainable_params == all_params:
-        LOGGER.warning("[LoRA] ⚠️  ALL parameters are trainable. Check if LoRA adapters were applied correctly.")
+    if s.trainable == s.total:
+        LOGGER.warning(
+            "[LoRA] ⚠️  ALL parameters are trainable. Check if LoRA adapters were applied correctly."
+        )
     
     # Memory monitoring - GPU/CUDA
     if torch.cuda.is_available():
@@ -2768,10 +2787,10 @@ class LoraTrainingStrategy:
             if candidate_roots:
                 total_layers = max(candidate_roots)
             else:
-                # Fallback: extract max top-level index from LoRA parameter names
+                # Fallback: extract max top-level index from adapter parameter names
                 max_idx = 0
                 for name, _ in model.named_parameters():
-                    if "lora_" not in name:
+                    if not _is_adapter_param(name):
                         continue
                     for p in name.split("."):
                         if p.isdigit():
@@ -2781,7 +2800,7 @@ class LoraTrainingStrategy:
 
         factors = {}
         for name, param in model.named_parameters():
-            if "lora_" not in name:
+            if not _is_adapter_param(name):
                 continue
             # Extract layer index from name (e.g., "model.23.cv3.0.conv.lora_A.weight")
             parts = name.split(".")
@@ -3356,7 +3375,7 @@ class LoraTrainingStrategy:
 def get_lora_training_stats(model, svd_sample_ratio: float = 0.2, svd_max_layers: int = 20) -> Dict[str, Any]:
     """
     Gather comprehensive LoRA training statistics for monitoring.
-    
+
     Returns a dict with metrics useful for TensorBoard/W&B logging.
 
     Args:
@@ -3365,30 +3384,18 @@ def get_lora_training_stats(model, svd_sample_ratio: float = 0.2, svd_max_layers
             estimation (default 0.2). Full-model SVD is expensive for large models.
         svd_max_layers: Hard cap on number of layers for SVD (default 20).
     """
+    s = _compute_param_stats(model)
     stats = {
         'lora_enabled': getattr(model, 'lora_enabled', False),
-        'total_params': 0,
-        'trainable_params': 0,
-        'lora_params': 0,
-        'frozen_params': 0,
+        'total_params': s.total,
+        'trainable_params': s.trainable,
+        'lora_params': s.adapter,
+        'frozen_params': s.frozen,
         'lora_modules': 0,
         'effective_rank_avg': 0.0,
         'norm_A_frobenius': 0.0,
         'norm_B_frobenius': 0.0,
     }
-
-    norm_A_sum = 0.0
-    norm_B_sum = 0.0
-    lora_module_count = 0
-
-    for name, param in model.named_parameters():
-        stats['total_params'] += param.numel()
-        if param.requires_grad:
-            stats['trainable_params'] += param.numel()
-        else:
-            stats['frozen_params'] += param.numel()
-        if _is_adapter_param(name):
-            stats['lora_params'] += param.numel()
 
     # First pass: collect LoRA modules and cheap stats (Frobenius norms).
     # Handles both PEFT <0.18 (direct attr with .weight) and PEFT >=0.18 (ModuleDict).
@@ -3402,7 +3409,11 @@ def get_lora_training_stats(model, svd_sample_ratio: float = 0.2, svd_max_layers
             return [attr.weight]
         return []
 
+    norm_A_sum = 0.0
+    norm_B_sum = 0.0
+    lora_module_count = 0
     lora_layers = []
+
     for module in model.modules():
         a_weights = _extract_weights(getattr(module, 'lora_A', None))
         b_weights = _extract_weights(getattr(module, 'lora_B', None))

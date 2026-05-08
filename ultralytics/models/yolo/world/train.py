@@ -128,9 +128,14 @@ class WorldTrainer(DetectionTrainer):
         for dataset in datasets:
             if not hasattr(dataset, "category_names"):
                 continue
+            # img_path can be str or list[str]; Path() only accepts str/PathLike
+            img_path = dataset.img_path
+            if isinstance(img_path, list):
+                img_path = img_path[0]
+            cache_dir = Path(img_path).parent
             text_embeddings.update(
                 self.generate_text_embeddings(
-                    list(dataset.category_names), batch, cache_dir=Path(dataset.img_path).parent
+                    list(dataset.category_names), batch, cache_dir=cache_dir
                 )
             )
         self.text_embeddings = text_embeddings

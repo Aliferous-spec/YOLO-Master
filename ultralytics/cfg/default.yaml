@@ -152,6 +152,7 @@ lora_save_adapters: True # (bool) Save LoRA adapters
 lora_adapter_dir: "lora_adapter" # (str) Directory name for adapters
 lora_auto_r_ratio: 0.0 # (float) Auto calculate LoRA rank based on params ratio
 lora_use_dora: False # (bool) Enable DoRA (Weight-Decomposed Low-Rank Adaptation)
+lora_allow_rtdetr_dora: False # (bool) Allow experimental RT-DETR + DoRA instead of auto-degrading to plain LoRA
 lora_use_rslora: True # (bool) Enable RS-LoRA scaling for better high-rank stability
 lora_init_lora_weights: True # (bool|str) LoRA init mode: True/False for standard init, or "gaussian". "pissa"/"olora" require newer PEFT.
 lora_type: "lora" # (str) PEFT type: "lora", "loha", "lokr", "adalora", "ia3", "oft", "boft", "hra"

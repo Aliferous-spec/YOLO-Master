@@ -119,18 +119,22 @@ def test_rtdetr_lora_safety_guard_mutates_training_args():
     assert args.amp is True
     assert args.lora_alpha_warmup == 3
     assert args.lora_lr_mult == 1.0
+    assert args.lora_use_dora is False
     assert args.lora_include_attention is True
     assert config.alpha_warmup == 3
     assert config.lr_mult == 1.0
+    assert config.use_dora is False
     assert config.include_attention is True
     assert "amp" not in kwargs
     assert kwargs["lora_alpha_warmup"] == 3
     assert kwargs["lora_lr_mult"] == 1.0
+    assert kwargs["lora_use_dora"] is False
     assert kwargs["lora_include_attention"] is True
     assert changes == {
         "lora_alpha_warmup": {"from": 0, "to": 3},
         "lora_lr_mult": {"from": 2.0, "to": 1.0},
         "lora_include_attention": {"from": False, "to": True},
+        "lora_use_dora": {"from": True, "to": False},
     }
 
 

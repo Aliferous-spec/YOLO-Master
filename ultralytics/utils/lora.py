@@ -1252,6 +1252,7 @@ class LoRAConfig:
     gradient_checkpointing: bool = False
     auto_r_ratio: float = 0.0 # Automatically calculate R based on parameter ratio
     use_dora: bool = False # Enable DoRA (Weight-Decomposed Low-Rank Adaptation)
+    allow_rtdetr_dora: bool = False # Allow experimental RT-DETR + DoRA instead of auto-degrading to LoRA
     use_rslora: bool = True # Enable Rank-Stabilized LoRA scaling (alpha / sqrt(r))
     init_lora_weights: Union[str, bool] = True # LoRA init mode: True/False for std init, or "gaussian"/"pissa"/"olora"
     peft_type: str = "lora" # Options: "lora", "loha", "lokr", "adalora", "ia3", "oft", "boft", "hra"
@@ -1396,6 +1397,7 @@ class LoRAConfig:
             "gradient_checkpointing": "lora_gradient_checkpointing",
             "auto_r_ratio": "lora_auto_r_ratio",
             "use_dora": "lora_use_dora",
+            "allow_rtdetr_dora": "lora_allow_rtdetr_dora",
             "use_rslora": "lora_use_rslora",
             "init_lora_weights": "lora_init_lora_weights",
             "peft_type": "lora_type",
@@ -2196,11 +2198,18 @@ def _apply_rtdetr_lora_safety(
         )
 
     if bool(getattr(config, "use_dora", False)):
-        LOGGER.warning(
-            "[LoRA] RT-DETR + DoRA is higher-risk than plain LoRA. "
-            "If NaN persists after the safety guard, retry with lora_use_dora=False "
-            "or restrict lora_target_modules to input_proj/query_pos/encoder layers."
-        )
+        if bool(getattr(config, "allow_rtdetr_dora", False)):
+            LOGGER.warning(
+                "[LoRA] RT-DETR + DoRA is experimental and has shown early NaN collapse in local probes. "
+                "Proceeding because lora_allow_rtdetr_dora=True."
+            )
+        else:
+            _set_lora_runtime_value(args, config, "lora_use_dora", "use_dora", kwargs, False)
+            changes["lora_use_dora"] = {"from": True, "to": False}
+            LOGGER.warning(
+                "[LoRA] RT-DETR + DoRA is unstable in local probes; auto-degrading to plain LoRA. "
+                "Set lora_allow_rtdetr_dora=True to force the experimental path."
+            )
 
     return changes
 
@@ -2305,6 +2314,7 @@ def apply_lora(
         config.include_attention = False
 
     rtdetr_safety_changes = _apply_rtdetr_lora_safety(model, args, config, kwargs)
+    variant = _effective_peft_variant(config)
 
     # 2.6 YOLO12 Area-Attention safety guard.
     # AAttn uses Conv2d-based softmax attention; LoRA injection here easily causes

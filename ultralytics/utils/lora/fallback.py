@@ -941,6 +941,7 @@ def _wrap_top_level_lora_model(model: "DetectionModel", config: Any = None) -> "
 
     model.lora_enabled = True
     model.lora_config = config
+    return model
 
 __all__ = [
     "FewShotLoRAConv",

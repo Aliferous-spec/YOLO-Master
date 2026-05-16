@@ -184,7 +184,13 @@ def run_lora_diagnose(request: dict[str, Any], deps: LoraDiagnoseDeps) -> dict[s
     model = deps.build_model(request)
     adapter_loaded = None
     if adapter_path:
-        adapter_loaded = bool(model.load_lora(adapter_path, merge=bool(params.get("merge", False))))
+        adapter_loaded = bool(
+            model.load_lora(
+                adapter_path,
+                merge=bool(params.get("merge", False)),
+                trainable=bool(params.get("trainable", False)),
+            )
+        )
     base_model = _unwrap_model(getattr(model, "model", model))
 
     from ultralytics.utils.lora import get_lora_training_stats

@@ -456,12 +456,13 @@ class Model(torch.nn.Module):
         LOGGER.warning("[LoRA] Merge skipped: no active LoRA adapters found on trainer.model or model.")
         return False
 
-    def load_lora(self, path: str | Path, merge: bool = False) -> bool:
+    def load_lora(self, path: str | Path, merge: bool = False, trainable: bool = False) -> bool:
         """Load LoRA adapters from a saved adapter directory.
 
         Args:
             path (str | Path): Directory containing the saved adapter files.
             merge (bool): If True, merge the adapters into the base model immediately after loading.
+            trainable (bool): If True, reload adapters in trainable mode for continued fine-tuning.
 
         Returns:
             (bool): True if adapters were loaded successfully, otherwise False.
@@ -471,12 +472,18 @@ class Model(torch.nn.Module):
         from ultralytics.utils.torch_utils import unwrap_model
 
         base_model = unwrap_model(self.model)
-        ok = load_lora_adapters(base_model, path, merge=merge)
+        ok = load_lora_adapters(base_model, path, merge=merge, trainable=trainable)
         if ok and base_model is not self.model:
             self.model = base_model
         if ok and getattr(self.trainer, "model", None) is not None:
             self.trainer.model = self.model
         return ok
+
+    def _has_active_lora_model(self) -> bool:
+        """Return True when the current in-memory model already carries active LoRA adapters."""
+        from ultralytics.utils.torch_utils import unwrap_model
+
+        return bool(getattr(unwrap_model(self.model), "lora_enabled", False))
 
     def info(self, detailed: bool = False, verbose: bool = True):
         """Display model information.
@@ -842,8 +849,11 @@ class Model(torch.nn.Module):
 
         self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
         if not args.get("resume"):  # manually set model only if not resuming
-            self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
-            self.model = self.trainer.model
+            if self._has_active_lora_model():
+                self.trainer.model = self.model
+            else:
+                self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
+                self.model = self.trainer.model
 
         self.trainer.train()
         # Update model and cfg after training

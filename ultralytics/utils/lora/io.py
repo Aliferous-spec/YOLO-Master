@@ -85,7 +85,13 @@ def save_lora_adapters(model: "DetectionModel", path: Union[str, Path]) -> bool:
         return False
 
 
-def load_lora_adapters(model: "DetectionModel", path: Union[str, Path], merge: bool = False, force_replace: bool = False) -> bool:
+def load_lora_adapters(
+    model: "DetectionModel",
+    path: Union[str, Path],
+    merge: bool = False,
+    force_replace: bool = False,
+    trainable: bool = False,
+) -> bool:
     """
     Loads LoRA adapter weights onto an existing Ultralytics model.
 
@@ -94,6 +100,7 @@ def load_lora_adapters(model: "DetectionModel", path: Union[str, Path], merge: b
         path: Directory containing PEFT adapter files.
         merge: Whether to merge loaded adapters into the base model immediately.
         force_replace: If True, replace existing LoRA adapters with new ones (default False).
+        trainable: If True, keep PEFT adapter params trainable for continued fine-tuning.
     """
     path = Path(path)
     if not path.exists():
@@ -145,7 +152,11 @@ def load_lora_adapters(model: "DetectionModel", path: Union[str, Path], merge: b
         return False
 
     try:
-        peft_model_wrapper = _lora_pkg().PeftModel.from_pretrained(model.model, str(path), is_trainable=False)
+        peft_model_wrapper = _lora_pkg().PeftModel.from_pretrained(
+            model.model,
+            str(path),
+            is_trainable=trainable,
+        )
         peft_model_wrapper.__class__ = _lora_pkg().PeftProxy
         model.model = peft_model_wrapper
         _lora_pkg()._wrap_top_level_lora_model(model, getattr(peft_model_wrapper, "peft_config", None))

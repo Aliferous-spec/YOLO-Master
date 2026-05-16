@@ -92,7 +92,42 @@ def test_load_lora_delegates_to_adapter_loader(tmp_path):
 
     with mock.patch("ultralytics.utils.lora.load_lora_adapters", return_value=True) as load_mock:
         assert model.load_lora(tmp_path / "lora_adapter")
-        load_mock.assert_called_once_with(model.model, tmp_path / "lora_adapter", merge=False)
+        load_mock.assert_called_once_with(model.model, tmp_path / "lora_adapter", merge=False, trainable=False)
+
+
+def test_load_lora_supports_trainable_reload(tmp_path):
+    """Test that load_lora can request a trainable PEFT reload for continued fine-tuning."""
+    model = make_stub_yolo()
+
+    with mock.patch("ultralytics.utils.lora.load_lora_adapters", return_value=True) as load_mock:
+        assert model.load_lora(tmp_path / "lora_adapter", trainable=True)
+        load_mock.assert_called_once_with(model.model, tmp_path / "lora_adapter", merge=False, trainable=True)
+
+
+def test_train_preserves_active_lora_model():
+    """Test that training keeps an already-loaded LoRA model instead of rebuilding it."""
+    model = make_stub_yolo()
+    model.model.lora_enabled = True
+    model.model.yaml = {}
+    model.overrides = {"model": "yolo11n.pt"}
+    model.ckpt = None
+    model.task = "detect"
+    model.session = None
+    model.callbacks = {}
+    model._has_active_lora_model = mock.Mock(return_value=True)
+
+    trainer = mock.Mock()
+    trainer.get_model = mock.Mock()
+    trainer.model = None
+    trainer.train.side_effect = RuntimeError("stop")
+
+    with mock.patch.object(model, "_smart_load", return_value=lambda overrides, _callbacks: trainer), \
+         mock.patch("ultralytics.utils.checks.check_pip_update_available"), \
+         pytest.raises(RuntimeError, match="stop"):
+        model.train(data="coco8.yaml", epochs=1)
+
+    assert trainer.get_model.call_count == 0
+    assert trainer.model is model.model
 
 
 def test_save_lora_only_supports_fallback_backend(tmp_path):

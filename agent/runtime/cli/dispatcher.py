@@ -4660,7 +4660,11 @@ def run_lora_adapters(request: dict[str, Any]) -> dict[str, Any]:
     elif action == "load":
         if not path:
             raise ValueError("`inputs.path` is required for adapter load.")
-        ok = model.load_lora(path, merge=bool(params.get("merge", False)))
+        ok = model.load_lora(
+            path,
+            merge=bool(params.get("merge", False)),
+            trainable=bool(params.get("trainable", False)),
+        )
         payload = response(request["skill"], "ok" if ok else "failed", "adapter load finished")
     elif action == "merge":
         ok = model.merge_lora()

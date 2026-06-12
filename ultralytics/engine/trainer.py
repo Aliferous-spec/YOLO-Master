@@ -403,6 +403,9 @@ class BaseTrainer:
                 if hasattr(m, 'moe_loss_fn'):
                     m.moe_loss_fn.balance_loss_coeff = balance_loss_coeff
                     m.moe_loss_fn.z_loss_coeff = router_z_loss_coeff
+                    # Sync variance_loss_coeff from config (default 0.01)
+                    variance_loss_coeff = getattr(self.args, 'moe_variance_loss', 0.01)
+                    m.moe_loss_fn.variance_loss_coeff = variance_loss_coeff
             LOGGER.info(
                 f"[MoE] Config injected into {injected} MoE modules: "
                 f"balance_loss={balance_loss_coeff}, z_loss={router_z_loss_coeff}, "

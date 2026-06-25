@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 from ultralytics.nn.modules.mot import C2fMoT, MoTBlock, anneal_mot_temperature, collect_mot_aux_loss
 from ultralytics.nn.tasks import DetectionModel
@@ -32,6 +33,32 @@ def test_mot_block_forward_backward_all_experts_trainable():
     assert _has_grad(module.router)
     for expert in module.experts:
         assert _has_grad(expert)
+
+
+class _FailIfCalled(nn.Module):
+    def forward(self, x):
+        raise AssertionError("inactive expert should be skipped during eval")
+
+
+def test_mot_eval_skips_inactive_experts():
+    torch.manual_seed(0)
+    module = MoTBlock(32, num_heads=4, top_k=1, window_size=4, n_points=2, mlp_ratio=1.5).eval()
+    with torch.no_grad():
+        final_router = module.router.router[-1]
+        final_router.weight.zero_()
+        final_router.bias.copy_(torch.tensor([8.0, -8.0, -9.0]))
+    module.experts[1] = _FailIfCalled()
+    module.experts[2] = _FailIfCalled()
+
+    with torch.no_grad():
+        out, aux = module(torch.randn(2, 32, 8, 8))
+    assert out.shape == (2, 32, 8, 8)
+    assert not aux.requires_grad
+
+
+def test_mot_exploration_default_is_small():
+    module = MoTBlock(32, num_heads=4, top_k=2, window_size=4, n_points=2)
+    assert module.router.exploration_eps == 0.001
 
 
 def test_c2fmot_collects_aux_loss_and_keeps_shape():

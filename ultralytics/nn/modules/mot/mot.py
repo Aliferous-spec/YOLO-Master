@@ -16,12 +16,8 @@ distinct inductive bias for a specific aspect of visual feature processing:
   Expert 2 — DeformableTransformer  (sparse deformable sampling, best for irregular/occluded objects)
 
 A content-aware router (lightweight 1×1 MLP) assigns each spatial token a
-*sparse Top-K weight* over these experts. The routing is **soft Top-K**:
-all experts are computed every forward and blended by their (Top-K-masked,
-renormalised) weights, so non-selected experts contribute 0 to the blend
-while the graph stays static and ONNX/TorchScript trace-stable. This is a
-deliberate trade-off — true sparse dispatch would save little here because
-the three experts have distinct, individually-cheap compute graphs.
+*sparse Top-K weight* over these experts. Training and export keep a static
+soft Top-K graph; normal eval skips experts that receive no routed tokens.
 
 Key properties
 ──────────────
@@ -230,7 +226,8 @@ class _WindowTransformerExpert(nn.Module):
     @staticmethod
     def _window_reverse(windows: torch.Tensor, win: int, H: int, W: int) -> torch.Tensor:
         """[B*nH*nW, win*win, C] → [B, H, W, C]"""
-        B = int(windows.shape[0] / (H * W / win / win))
+        num_windows_per_image = (H // win) * (W // win)
+        B = windows.shape[0] // max(num_windows_per_image, 1)
         C = windows.shape[2]
         x = windows.view(B, H // win, W // win, win, win, C)
         return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, C)
@@ -455,7 +452,7 @@ class _MoTRouter(nn.Module):
 
     def __init__(self, dim: int, num_experts: int = 3, top_k: int = 2,
                  use_spatial: bool = True, temperature: float = 1.0,
-                 exploration_eps: float = 0.02):
+                 exploration_eps: float = 0.001):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
@@ -508,7 +505,7 @@ class _MoTRouter(nn.Module):
             sparse_w.scatter_(1, topk_idx, topk_weights)
             weights = sparse_w
             if self.training and self.exploration_eps > 0:
-                eps = min(max(self.exploration_eps, 0.0), 0.2)
+                eps = min(max(float(self.exploration_eps), 0.0), 0.02)
                 weights = weights * (1.0 - eps) + dense_weights * eps
             indices = topk_idx
         else:
@@ -573,7 +570,7 @@ class MoTBlock(nn.Module):
         use_spatial_router: bool = True,
         balance_loss_coeff: float = 0.01,
         dropout: float = 0.0,
-        exploration_eps: float = 0.02,
+        exploration_eps: float = 0.001,
         window_shift: bool = False,
     ):
         super().__init__()
@@ -620,20 +617,25 @@ class MoTBlock(nn.Module):
             aux_loss      : scalar (router z-loss, 0 if balance_loss_coeff==0)
         """
         # ── Routing weights ──────────────────────────────────────────────
-        weights, _ = self.router(x)   # [B, E, H, W]
+        weights, indices = self.router(x)   # [B, E, H, W]
 
         # ── Expert computation ───────────────────────────────────────────
-        # All experts forward unconditionally and are blended by routing
-        # weight. With soft Top-K routing the sparse weights zero-out the
-        # blend contribution of inactive experts, so gradients only flow
-        # through the selected experts via weight sparsity.
-        #
-        # No data-dependent scalar short-circuit (e.g. ``w.max().item()``):
-        # that forces a GPU→CPU sync every step and breaks ONNX/TorchScript
-        # tracing. The three experts have distinct compute graphs and are all
-        # cheap relative to the backbone, so unconditional compute is fastest.
+        # Training/export keep the static all-expert graph. In normal eval,
+        # skip experts that have no routed tokens; the small CPU sync is then
+        # acceptable and can save one or two Transformer expert forwards.
         out = x.new_zeros(x.shape)
-        for e_idx, expert in enumerate(self.experts):
+        active_experts = range(self.NUM_EXPERTS)
+        in_onnx_export = getattr(torch.onnx, "is_in_onnx_export", lambda: False)()
+        if (
+            not self.training
+            and self.top_k < self.NUM_EXPERTS
+            and not torch.jit.is_tracing()
+            and not torch.jit.is_scripting()
+            and not in_onnx_export
+        ):
+            active_experts = sorted({int(i) for i in torch.unique(indices.detach()).cpu().tolist()})
+        for e_idx in active_experts:
+            expert = self.experts[e_idx]
             w = weights[:, e_idx:e_idx + 1]   # [B, 1, H, W]
             out = out + expert(x) * w
         out = self.out_norm(self.out_proj(out))
@@ -693,6 +695,7 @@ class C2fMoT(nn.Module):
         mlp_ratio: float = 2.0,
         temperature: float = 1.0,
         balance_loss_coeff: float = 0.01,
+        exploration_eps: float = 0.001,
         e: float = 0.5,
     ):
         super().__init__()
@@ -721,6 +724,7 @@ class C2fMoT(nn.Module):
                 mlp_ratio=mlp_ratio,
                 temperature=temperature,
                 balance_loss_coeff=balance_loss_coeff,
+                exploration_eps=exploration_eps,
                 window_shift=bool(i % 2),
             )
             for i in range(n)

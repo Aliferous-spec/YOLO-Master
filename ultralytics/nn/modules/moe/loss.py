@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
+import warnings
 from typing import Optional, Dict, Union, Tuple
 
 
@@ -28,13 +29,13 @@ def gshard_balance_loss(expert_usage: torch.Tensor, num_experts: int,
                         reduce_ddp: bool = False) -> torch.Tensor:
     """GShard-style balance loss: N * sum(usage^2). Equals 1.0 at uniform usage.
 
-    When ``reduce_ddp`` is True the (normalised) usage is averaged across DDP
-    ranks first, so all ranks optimise the same global balance target.
+    When ``reduce_ddp`` is True the raw usage/count vector is averaged across
+    ranks before normalization, so all ranks optimise the same global target.
     """
     usage = expert_usage.reshape(-1).float()
-    usage = usage / usage.sum().clamp_min(1e-6)
     if reduce_ddp:
         usage = all_reduce_mean(usage)
+    usage = usage / usage.sum().clamp_min(1e-6)
     return num_experts * torch.sum(usage * usage)
 
 
@@ -50,12 +51,12 @@ def weighted_gshard_balance_loss(
     and reaches its minimum when `usage` matches `target`. Keeps the same O(1)
     scale as the plain GShard loss so it can be summed with other MoE aux losses
     without one term silently dominating. ``reduce_ddp`` averages usage across
-    ranks (no-op on single GPU).
+    ranks before normalization (no-op on single GPU).
     """
     usage = expert_usage.reshape(-1).float()
-    usage = usage / usage.sum().clamp_min(1e-6)
     if reduce_ddp:
         usage = all_reduce_mean(usage)
+    usage = usage / usage.sum().clamp_min(1e-6)
     target = target_usage.reshape(-1).float().to(usage.dtype)
     target = target / target.sum().clamp_min(1e-6)
     # sum(usage^2 / target): ==1.0 when usage==target; reduces to plain GShard
@@ -271,9 +272,10 @@ class MoELoss(nn.Module):
         variance_loss = torch.tensor(0.0, device=router_probs.device)
         if self.variance_loss_coeff > 0:
             # Target: uniform distribution -> variance = 0
-            # usage here is importance (soft) or counts (hard)
+            # Use importance instead of detached hard counts so this term can
+            # actually steer the router in both hard and soft balancing modes.
             target_usage = 1.0 / self.num_experts
-            variance = torch.mean((usage - target_usage) ** 2)
+            variance = torch.mean((importance - target_usage) ** 2)
             variance_loss = variance
 
         floor = float(getattr(self, "coeff_floor", 0.0))
@@ -289,6 +291,7 @@ class MoELoss(nn.Module):
         
         # NaN Guard (Graph Safe)
         if not torch.isfinite(total_loss).all():
+            warnings.warn("Non-finite MoE aux loss encountered; replacing NaN/Inf with 0.", RuntimeWarning)
             total_loss = torch.nan_to_num(total_loss, nan=0.0, posinf=0.0, neginf=0.0)
 
         if return_dict:

@@ -31,6 +31,7 @@ from ultralytics.nn.modules.moe.modules import (
     OptimizedMOEImproved,
     UltimateOptimizedMoE,
     UltraOptimizedMoE,
+    ZeroCostRouter,
 )
 from ultralytics.nn.modules.moe.experts import (
     OptimizedSimpleExpert, GhostExpert, SimpleExpert, SpatialExpert, InvertedResidualExpert,
@@ -226,6 +227,43 @@ def test_moeloss_diversity_skips_single_expert():
     out = loss_fn(probs, logits, idx, expert_outputs=expert_out, return_dict=True)
     assert torch.isfinite(out["loss"]).all()
     assert float(out["diversity_loss"]) == 0.0
+
+
+def test_moeloss_variance_loss_backprops_to_router_logits():
+    """Variance loss must use non-detached importance, not detached usage."""
+    torch.manual_seed(0)
+    E, K, B = 4, 2, 8
+    logits = torch.randn(B, E, requires_grad=True)
+    probs = torch.softmax(logits, dim=1)
+    idx = torch.topk(probs, K, dim=1).indices
+    loss_fn = MoELoss(
+        balance_loss_coeff=0.0,
+        z_loss_coeff=0.0,
+        variance_loss_coeff=1.0,
+        num_experts=E,
+        top_k=K,
+    )
+    loss = loss_fn(probs, logits, idx)
+    loss.backward()
+    assert logits.grad is not None and logits.grad.abs().sum() > 0
+
+
+def test_zero_cost_router_returns_pre_softmax_logits():
+    """ZeroCostRouter must not feed softmax probabilities back into softmax."""
+    router = ZeroCostRouter(in_channels=2, num_experts=3, top_k=1, temperature=1.0)
+    with torch.no_grad():
+        router.router[0].weight.copy_(
+            torch.tensor([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0, 0.0],
+            ])
+        )
+    x = torch.tensor([[[[1.0]], [[2.0]]]])
+    _, _, stats = router(x)
+    expected_logits = torch.tensor([[1.0, 2.0, -1.0]])
+    assert torch.allclose(stats["router_logits"], expected_logits)
+    assert torch.allclose(stats["router_probs"], torch.softmax(expected_logits, dim=1))
 
 
 # ---------------------------------------------------------------------------

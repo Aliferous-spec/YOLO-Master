@@ -43,9 +43,11 @@ class FlopsUtils:
         # Single Conv2d compute
         out_h = (H + 2 * layer.padding[0] - layer.dilation[0] * (layer.kernel_size[0] - 1) - 1) // layer.stride[0] + 1
         out_w = (W + 2 * layer.padding[1] - layer.dilation[1] * (layer.kernel_size[1] - 1) - 1) // layer.stride[1] + 1
-        ops = (layer.in_channels // layer.groups) * layer.kernel_size[0] * layer.kernel_size[1]
-        ops = (ops + (1 if layer.bias is not None else 0)) * layer.out_channels * out_h * out_w
-        return ops * 2.0 * B
+        macs_per_output = (layer.in_channels // layer.groups) * layer.kernel_size[0] * layer.kernel_size[1]
+        output_elements = B * layer.out_channels * out_h * out_w
+        conv_flops = 2.0 * macs_per_output * output_elements
+        bias_flops = output_elements if layer.bias is not None else 0.0
+        return conv_flops + bias_flops
 
 
 # ==========================================
@@ -84,7 +86,7 @@ class BatchedExpertComputation:
 
         # Plan A: conditional computation (skip low-weight experts)
         # Threshold is tunable (accuracy vs speed)
-        weight_threshold = 0.01
+        weight_threshold = 0.01 if experts.training else 0.0
         valid_mask = weights_flat > weight_threshold
 
         # Initialize outputs

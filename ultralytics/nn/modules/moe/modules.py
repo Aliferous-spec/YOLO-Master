@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
+import warnings
 import weakref
 from typing import Tuple, Dict, Optional, Union
 from .utils import FlopsUtils, get_safe_groups, BatchedExpertComputation
@@ -189,9 +190,14 @@ def _robust_deepcopy(obj, memo):
                     setattr(new_obj, k, torch.tensor(0.0))
                 else:
                     raise e
-            except Exception:
+            except Exception as e:
                 # Best effort copy for other errors (e.g. pickling issues)
                 # If it fails, we assume it's transient state and ignore it or shallow copy
+                warnings.warn(
+                    f"Falling back to shallow deepcopy for attribute '{k}' in {cls.__name__}: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 setattr(new_obj, k, v) 
                 
     return new_obj
@@ -1872,10 +1878,7 @@ class ZeroCostRouter(nn.Module):
         stat_dim = 2 * in_channels
         
         # Ultra-lightweight mapping network
-        self.router = nn.Sequential(
-            nn.Linear(stat_dim, num_experts, bias=False),
-            nn.Softmax(dim=1)
-        )
+        self.router = nn.Sequential(nn.Linear(stat_dim, num_experts, bias=False))
         
         # Initialize with moderate variance for input-dependent routing
         nn.init.normal_(self.router[0].weight, std=0.05)

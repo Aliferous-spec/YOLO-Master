@@ -107,6 +107,7 @@ from ultralytics.nn.modules import (
     C2fMoA,
     C2fMoT,
 )
+from ultralytics.nn.modules.moe import is_experimental_moe, STABLE_MOE_CLASSES
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
@@ -1851,6 +1852,15 @@ def parse_model(d, ch, verbose=True):
             c2 = ch[f]
 
         m_ = torch.nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+
+        # Runtime guard: warn when EXPERIMENTAL MoE classes are used in YAML configs
+        _moe_cls_name = getattr(m, "__name__", "")
+        if _moe_cls_name and is_experimental_moe(_moe_cls_name):
+            LOGGER.warning(
+                f"{colorstr('yellow')}{_moe_cls_name} is EXPERIMENTAL — "
+                f"API may change; not recommended for production. "
+                f"Consider using STABLE MoE variants: {sorted(STABLE_MOE_CLASSES)}"
+            )
 
         # Inject MoE hyperparameters from global config into MoE modules
         # This bridges the gap between YAML config (moe_balance_loss, etc.)

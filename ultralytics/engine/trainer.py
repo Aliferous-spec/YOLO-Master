@@ -463,6 +463,30 @@ class BaseTrainer:
                     m.loss_fn.z_loss_coef = getattr(self.args, 'molora_router_z_loss', 0.001)
                 if hasattr(m, 'loss_fn') and hasattr(m.loss_fn, 'diversity_loss_coef'):
                     m.loss_fn.diversity_loss_coef = getattr(self.args, 'molora_diversity_loss', 0.0)
+
+            # ── MapSaturationScheduler injection (mAP-driven balance annealing) ──
+            if getattr(self.args, 'moe_map_saturation_enabled', False):
+                from ultralytics.nn.modules.moe.scheduler import MapSaturationScheduler, MapSaturationSchedulerConfig
+                moe_map_sat_config = MapSaturationSchedulerConfig(
+                    enabled=True,
+                    window_size=getattr(self.args, 'moe_map_saturation_window_size', 5),
+                    saturation_threshold=getattr(self.args, 'moe_map_saturation_threshold', 0.001),
+                    decay_factor=getattr(self.args, 'moe_map_saturation_decay_factor', 0.8),
+                    min_scale=getattr(self.args, 'moe_map_saturation_min_scale', 0.1),
+                )
+                for m in self.model.modules():
+                    if not is_core_moe_block(m):
+                        continue
+                    if hasattr(m, 'balance_loss_coeff'):
+                        m.map_saturation_scheduler = MapSaturationScheduler(moe_map_sat_config)
+                    if hasattr(m, 'moe_loss_fn') and hasattr(m.moe_loss_fn, 'balance_loss_coeff'):
+                        m.moe_loss_fn.map_saturation_scheduler = MapSaturationScheduler(moe_map_sat_config)
+                LOGGER.info(
+                    f"[MoE] MapSaturationScheduler injected: window={moe_map_sat_config.window_size}, "
+                    f"threshold={moe_map_sat_config.saturation_threshold}, "
+                    f"decay={moe_map_sat_config.decay_factor}, min_scale={moe_map_sat_config.min_scale}"
+                )
+
             LOGGER.info(
                 f"[MoE] Config injected into {injected} MoE modules: "
                 f"balance_loss={balance_loss_coeff}, z_loss={router_z_loss_coeff}, "
@@ -499,8 +523,12 @@ class BaseTrainer:
                     f"[MoA] Config injected into {moa_injected} MoABlock layers: "
                     f"local_window_size={moa_win}"
                 )
-        except Exception:
-            pass
+        except (ImportError, AttributeError) as e:
+            if RANK in {-1, 0}:
+                LOGGER.warning(
+                    f"[MoT/MoA] Config injection skipped: {e}",
+                    exc_info=LOGGER.isEnabledFor(10),
+                )
 
         # MoLoRA injection (even if no MoE layers present)
         has_molora = any(
@@ -1071,6 +1099,22 @@ class BaseTrainer:
             if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
                 self._clear_memory(threshold=0.5)  # prevent VRAM spike
                 self.metrics, self.fitness = self.validate()
+
+                # Update MapSaturationScheduler with validation fitness (mAP)
+                if getattr(self, '_has_moe', False) and getattr(self.args, 'moe_map_saturation_enabled', False):
+                    from ultralytics.nn.modules.moe.utils import is_core_moe_block
+                    for m in self.model.modules():
+                        if not is_core_moe_block(m):
+                            continue
+                        scheduler = getattr(m, 'map_saturation_scheduler', None)
+                        if scheduler is not None:
+                            scheduler.update(self.fitness)
+                            if RANK in {-1, 0} and scheduler.last_state is not None:
+                                LOGGER.debug(
+                                    f"[MoE] MapSaturationScheduler updated: "
+                                    f"scale={scheduler.last_state.saturation_scale:.4f}, "
+                                    f"plateau={scheduler.last_state.plateau_detected}"
+                                )
 
             # NaN recovery
             if self._handle_nan_recovery(epoch):

@@ -245,6 +245,7 @@ moe_weight_threshold: 0.01 # (float) Weight threshold for conditional computatio
 moe_expert_warmup_epochs: 3 # (int) Epochs to freeze experts while router learns (was 5, too long)
 moe_router_lr_scale: 0.5 # (float) Router LR as fraction of base LR (was 0.1, too small to correct collapse)
 moe_collapse_threshold: 0.8 # (float) If max expert usage > threshold, trigger collapse recovery
+moe_dynamic_schedule: none # (str) Dynamic balance-loss scheduling: none, gini
 
 # MoT / MoA router settings
 mot_balance_loss: 0.01 # (float) GShard balance loss coefficient for MoT blocks
@@ -253,6 +254,10 @@ mot_sparse_train: False # (bool) Sparse expert dispatch during MoT training (fas
 moa_local_window_size: 7 # (int) Window size for MoA local attention head
 moa_mot_temperature_factor: 0.97 # (float) Per-epoch router temperature multiplier for MoA/MoT
 moa_mot_min_temperature: 0.3 # (float) Minimum router temperature after annealing
+# Independent auxiliary-loss gains per routing paradigm (Issue #7)
+moe_aux_gain: 1.0 # (float) Gain for MoE balance/z-loss auxiliary loss
+mot_aux_gain: 1.0 # (float) Gain for MoT router auxiliary loss
+moa_aux_gain: 1.0 # (float) Gain for MoA router auxiliary loss
 
 # MoLoRA (Mixture-of-LoRA) settings -----------------------------------------------------------------------------------------
 molora_num_experts: 0 # (int) Number of experts in MoLoRA layers (0 to disable)

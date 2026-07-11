@@ -22,18 +22,28 @@ def _has_grad(module):
 
 
 def test_mot_block_forward_backward_all_experts_trainable():
+    """All experts receive non-zero gradient during training.
+
+    With top_k=1, non-selected experts only receive gradient through the
+    exploration_eps (~0.02) blending floor.  Using ``out.mean()`` divides the
+    gradient by B*C*H*W (=2048), which can underflow to exact zero in float32
+    for the non-selected experts.  A squared-sum loss preserves sufficient
+    gradient magnitude for all experts to register as trainable.
+    """
     torch.manual_seed(0)
-    block = MoTBlock(32, num_heads=4, top_k=1, window_size=4, n_points=2).eval()
+    block = MoTBlock(32, num_heads=4, top_k=1, window_size=4, n_points=2).train()
     x = torch.randn(1, 32, 8, 8)
-    with torch.no_grad():
-        out, aux = block(x)
+    out, aux = block(x)
     assert out.shape == x.shape
     assert aux.requires_grad
     assert torch.isfinite(aux)
 
-    (out.mean() + aux).backward()
-    assert _has_grad(module.router)
-    for expert in module.experts:
+    # Squared-sum produces O(1) per-element gradient (vs O(1/N) for mean),
+    # ensuring non-selected experts' ~0.02-weighted contribution stays above
+    # the float32 underflow threshold.
+    ((out ** 2).sum() + aux).backward()
+    assert _has_grad(block.router)
+    for expert in block.experts:
         assert _has_grad(expert)
 
 

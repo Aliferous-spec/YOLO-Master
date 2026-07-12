@@ -276,12 +276,19 @@ class MoLoRAModel(nn.Module):
         LOGGER.info(f"[MoLoRA] Expert replay buffer loaded for domain '{buffer.get('domain')}'")
 
     def save_checkpoint(self, path: str) -> None:
-        """Save only MoLoRA parameters + config."""
+        """Save only MoLoRA parameters + config.
+
+        Includes registered buffers (e.g. ``_step_count``, ``_usage_ema``)
+        alongside trainable parameters, since these carry training state
+        needed for correct resume.
+        """
+        molora_keys = ("lora_A", "lora_B", "router", "molora",
+                       "_step_count", "_usage_ema", "_domain_active_mask")
         state = {
             "config": self.config.__dict__ if hasattr(self.config, "__dict__") else self.config,
             "state_dict": {
                 k: v for k, v in self.model.state_dict().items()
-                if any(p in k for p in ("lora_A", "lora_B", "router", "molora"))
+                if any(p in k for p in molora_keys)
             },
         }
         torch.save(state, path)

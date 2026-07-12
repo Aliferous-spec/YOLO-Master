@@ -356,7 +356,7 @@ class MoLoRAMoEAwareLayer(MoLoRALayer):
             balance_loss_coef=balance_loss_coef,
             z_loss_coef=z_loss_coef,
             diversity_loss_coef=diversity_loss_coef,
-            reduce_ddp=False,
+            reduce_ddp=True,
         )
 
         self._last_routing_stats: Optional[Dict[str, Any]] = None
@@ -387,7 +387,7 @@ class MoLoRAMoEAwareLayer(MoLoRALayer):
         if self._domain_active_mask is not None:
             device = router_logits.device
             mask = self._domain_active_mask.to(device).to(router_logits.dtype)
-            router_logits = router_logits + (1.0 - mask) * -1e9
+            router_logits = router_logits + (1.0 - mask) * torch.finfo(router_logits.dtype).min
 
         router_probs = F.softmax(router_logits, dim=-1)
         router_probs = self._apply_expert_dropout(router_probs)
@@ -520,6 +520,9 @@ def build_moe_aware_layer(
                 # Provide a skewed default distribution so frequency mode behaves
                 # differently from uniform; this enables meaningful ablation even
                 # when no prior usage stats are available.
+                # NOTE: The num_experts==4 fast-path is an ablation convenience
+                # for the most common MoLoRA configuration; the else-branch
+                # generalises to any expert count via exponential decay.
                 if cfg.num_experts == 4:
                     usage_history = torch.tensor([0.5, 0.2, 0.2, 0.1])
                 else:

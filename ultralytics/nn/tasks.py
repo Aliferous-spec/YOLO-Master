@@ -348,6 +348,11 @@ class BaseModel(torch.nn.Module):
         """
         if not self.is_fused():
             for m in self.model.modules():
+                # Skip MoLoRA-wrapped modules: fusing their Conv+BN would
+                # destroy the adapter structure (lora_A/lora_B on top of
+                # base_layer) and break checkpoint load/merge.
+                if type(m).__module__.startswith("ultralytics.nn.peft.molora"):
+                    continue
                 if isinstance(m, (Conv, Conv2, DWConv)) and hasattr(m, "bn"):
                     if not isinstance(m.conv, nn.Conv2d):
                         continue  # Skip wrapped layers (e.g., MoLoRALayer)

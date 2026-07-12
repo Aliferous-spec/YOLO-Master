@@ -37,17 +37,18 @@ class MoEDynamicScheduleState:
 def compute_gini(expert_usage: torch.Tensor) -> float:
     """Return the Gini coefficient of a non-negative expert-usage vector."""
     usage = expert_usage.detach().float().reshape(-1).clamp_min(0.0)
-    if usage.numel() == 0:
+    n = usage.numel()
+    if n == 0:
         return 0.0
     total = usage.sum()
-    if float(total) <= 0.0:
-        return 0.0
-
-    sorted_usage = torch.sort(usage / total).values
-    n = sorted_usage.numel()
+    # Single D2H sync: defer .item() until after all GPU computation.
+    sorted_usage = torch.sort(usage / total.clamp_min(1e-12)).values
     index = torch.arange(1, n + 1, device=sorted_usage.device, dtype=sorted_usage.dtype)
     gini = (2 * torch.sum(index * sorted_usage) / n) - ((n + 1) / n)
-    return float(gini.clamp(0.0, 1.0).cpu())
+    gini_val = float(gini.clamp(0.0, 1.0).item())
+    if gini_val != gini_val:  # NaN check for zero-total edge case
+        return 0.0
+    return gini_val
 
 
 class MoEDynamicScheduler:

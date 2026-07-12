@@ -8,6 +8,18 @@ from typing import Optional, Dict, Union, Tuple
 from .scheduler import MoEDynamicScheduler, MoEDynamicSchedulerConfig
 
 
+def _dtype_clamp_min(tensor: torch.Tensor, min_val: float = 1e-6) -> torch.Tensor:
+    """Dtype-aware clamp_min that prevents fp16 underflow.
+
+    The literal 1e-6 underflows to 0.0 in float16, making clamp_min a no-op.
+    This helper uses the smallest representable positive value for the
+    tensor's dtype when the requested floor is below that threshold.
+    """
+    if tensor.dtype == torch.float16:
+        min_val = max(min_val, 1e-4)  # fp16 smallest stable positive
+    return tensor.clamp_min(min_val)
+
+
 def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     """Average a tensor across DDP ranks (gradient-preserving, no-op on 1 GPU).
 
@@ -39,7 +51,7 @@ def gshard_balance_loss(expert_usage: torch.Tensor, num_experts: int,
     ranks first, so all ranks optimise the same global balance target.
     """
     usage = expert_usage.reshape(-1).float()
-    usage = usage / usage.sum().clamp_min(1e-6)
+    usage = usage / _dtype_clamp_min(usage.sum())
     if reduce_ddp:
         usage = all_reduce_mean(usage)
     return num_experts * torch.sum(usage * usage)
@@ -60,14 +72,14 @@ def weighted_gshard_balance_loss(
     ranks (no-op on single GPU).
     """
     usage = expert_usage.reshape(-1).float()
-    usage = usage / usage.sum().clamp_min(1e-6)
+    usage = _dtype_clamp_min(usage / _dtype_clamp_min(usage.sum()))
     if reduce_ddp:
         usage = all_reduce_mean(usage)
     target = target_usage.reshape(-1).float().to(usage.dtype)
-    target = target / target.sum().clamp_min(1e-6)
+    target = target / _dtype_clamp_min(target.sum())
     # sum(usage^2 / target): ==1.0 when usage==target; reduces to plain GShard
     # (uniform target -> N*sum(usage^2)) so it shares the same O(1) scale.
-    return torch.sum(usage * usage / target.clamp_min(1e-6))
+    return torch.sum(usage * usage / _dtype_clamp_min(target))
 
 
 def differentiable_balance_loss(
@@ -94,17 +106,17 @@ def differentiable_balance_loss(
     probs = router_probs.reshape(router_probs.shape[0], router_probs.shape[1], -1).mean(-1) \
         if router_probs.dim() == 4 else router_probs.reshape(-1, num_experts)
     importance = probs.mean(dim=0)  # keeps grad
-    importance = importance / importance.sum().clamp_min(1e-6)
+    importance = importance / _dtype_clamp_min(importance.sum())
 
     usage = expert_usage.reshape(-1).float().detach()
-    usage = usage / usage.sum().clamp_min(1e-6)
+    usage = usage / _dtype_clamp_min(usage.sum())
     if reduce_ddp:
         importance = all_reduce_mean(importance)
         usage = all_reduce_mean(usage)
 
     if target_usage is not None:
         w = target_usage.reshape(-1).float()
-        w = w / w.sum().clamp_min(1e-6)
+        w = w / _dtype_clamp_min(w.sum())
         usage = usage * w * num_experts  # uniform w -> unchanged
 
     return num_experts * torch.sum(importance * usage)

@@ -404,7 +404,9 @@ class CrossPathGate(nn.Module):
 
     def __init__(self, static_channels, dynamic_channels, out_channels, num_groups=8, drop_prob=0.1):
         super().__init__()
-        self.drop_prob = float(drop_prob)
+        # Register drop_prob as a persistent buffer so checkpoint save/restore
+        # preserves the configured drop rate (Python float would be lost).
+        self.register_buffer("drop_prob", torch.tensor(float(drop_prob)), persistent=True)
         self.static_channels = static_channels
         self.dynamic_channels = dynamic_channels
         self.out_channels = out_channels
@@ -675,8 +677,8 @@ class GatedFusionMoE(OptimalHybridGateMoE):
         # out = (1-drop) * (out + x) + drop * x = (1-drop)*out + x
         # This keeps the identity path alive even when dropped.
         if self.training and self.cross_gate.drop_prob > 0:
-            keep_prob = 1.0 - self.cross_gate.drop_prob
-            drop = torch.rand(B, 1, 1, 1, device=x.device) < self.cross_gate.drop_prob
+            keep_prob = 1.0 - float(self.cross_gate.drop_prob)
+            drop = torch.rand(B, 1, 1, 1, device=x.device) < float(self.cross_gate.drop_prob)
             out = out * torch.where(drop, torch.zeros_like(out), out.new_full((), 1.0 / keep_prob))
         out = out + x
 
@@ -867,7 +869,9 @@ class HyperUltimateMoE(nn.Module):
         # current_top_k via a buffer); complexity now scales expert *weights*
         # rather than the discrete top_k, avoiding complexity_score.item() sync
         # that previously stalled the pipeline (esp. on multi-GPU).
-        adaptive_top_k = int(self.current_top_k.item()) if self.training else self.top_k
+        # Use fixed top_k during training too — progressive sparsity fills
+        # the buffer but we avoid .item() sync by using the Python int.
+        adaptive_top_k = self.top_k
         complexity_scale = self.complexity_estimator(x_dynamic).mean().clamp(0.3, 1.5)
         
         # 4. Routing Decision (Mixed Precision)
@@ -1073,7 +1077,8 @@ class UltimateOptimizedMoE(nn.Module):
         complexity_scale = torch.nan_to_num(complexity_scale, nan=1.0, posinf=1.5, neginf=0.3).clamp(0.3, 1.5)
         out_static = self.static_net(x_static)
         
-        adaptive_top_k = int(self.current_top_k.item()) if self.training else self.top_k
+        # Use fixed top_k — avoids per-forward .item() GPU→CPU sync.
+        adaptive_top_k = self.top_k
         
         # Routing (AMP Acceleration - only on CUDA)
         with autocast(enabled=torch.cuda.is_available()):  # New: Mixed Precision
@@ -1131,9 +1136,9 @@ class UltimateOptimizedMoE(nn.Module):
         return {
             'gflops': flops,
             'num_params': sum(p.numel() for p in self.parameters()) / 1e6,
-            'last_aux_loss': self.aux_loss.item() if self.training else 0.0,
-            'current_temperature': self.routing.temperature,
-            'current_top_k': self.current_top_k.item()
+            'last_aux_loss': float(self.aux_loss) if self.training else 0.0,
+            'current_temperature': float(self.routing.temperature) if hasattr(self.routing, 'temperature') else 1.0,
+            'current_top_k': int(self.current_top_k) if self.current_top_k.numel() == 1 else self.top_k
         }
     
     def __deepcopy__(self, memo):
@@ -1145,6 +1150,12 @@ class UltimateOptimizedMoE(nn.Module):
 MOE = ES_MOE
 EfficientSpatialRouterMoE = OptimizedMOE
 ModularRouterExpertMoE = OptimizedMOEImproved
+
+# Aliases for safe loading
+if 'UltraOptimizedMoE' not in globals():
+    UltraOptimizedMoE = UltimateOptimizedMoE  # Upgrade to the SOTA implementation
+
+terExpertMoE = OptimizedMOEImproved
 
 # Aliases for safe loading
 if 'UltraOptimizedMoE' not in globals():

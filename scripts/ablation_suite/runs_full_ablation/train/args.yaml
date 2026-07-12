@@ -1,0 +1,289 @@
+task: detect
+mode: train
+model: /Users/gatilin/PycharmProjects/YOLO-Master-v0708/YOLO-Master-EsMoE-N.pt
+data: /Users/gatilin/MyWork/datasets/voc/VOC0712/VOCdevkit/VOC2007/voc0712.yaml
+epochs: 3
+time: null
+patience: 0
+batch: 8
+imgsz: 320
+save: false
+save_period: -1
+cache: false
+device: mps
+workers: 0
+project: /Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/ablation_suite/runs_full_ablation
+name: train
+exist_ok: true
+pretrained: true
+optimizer: AdamW
+verbose: false
+seed: 42
+deterministic: true
+single_cls: false
+rect: false
+cos_lr: true
+close_mosaic: 10
+resume: false
+amp: true
+fraction: 1.0
+profile: false
+freeze: null
+multi_scale: false
+compile: false
+overlap_mask: true
+mask_ratio: 4
+dropout: 0.0
+val: true
+split: val
+save_json: false
+conf: null
+iou: 0.7
+max_det: 300
+half: false
+dnn: false
+plots: false
+source: null
+vid_stride: 1
+stream_buffer: false
+visualize: false
+augment: false
+agnostic_nms: false
+weighted: false
+cluster: false
+sigma: 0.1
+iou_type: iou
+classes: null
+retina_masks: false
+embed: null
+end2end: null
+sparse_sahi: false
+slice_size: 640
+overlap_ratio: 0.2
+objectness_threshold: 0.15
+sparse_sahi_fallback: true
+show: false
+save_frames: false
+save_txt: false
+save_conf: false
+save_crop: false
+show_labels: true
+show_conf: true
+show_boxes: true
+line_width: null
+format: torchscript
+keras: false
+optimize: false
+int8: false
+dynamic: false
+simplify: true
+opset: null
+workspace: null
+nms: false
+lr0: 0.01
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+box: 7.5
+cls: 0.5
+dfl: 1.5
+moe: 0.3
+pose: 12.0
+kobj: 1.0
+nbs: 64
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5
+bgr: 0.0
+mosaic: 1.0
+mixup: 0.0
+cutmix: 0.0
+copy_paste: 0.0
+copy_paste_mode: flip
+auto_augment: randaugment
+erasing: 0.4
+cfg: null
+tracker: botsort.yaml
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+lora_bias: none
+lora_backend: peft
+lora_variant: lora
+lora_planner_enabled: false
+lora_include_head: false
+lora_freeze_bn: false
+lora_target_modules: null
+lora_save_adapters: true
+lora_adapter_dir: lora_adapter
+lora_auto_r_ratio: 0.0
+lora_use_dora: false
+lora_allow_rtdetr_dora: false
+lora_use_rslora: true
+lora_init_lora_weights: true
+lora_type: lora
+lora_quantization: none
+lora_include_moe: false
+lora_include_attention: false
+lora_only_backbone: false
+lora_only_3x3: false
+lora_exclude_modules: null
+lora_last_n: null
+lora_from_layer: null
+lora_to_layer: null
+lora_allow_depthwise: false
+lora_kernels: null
+lora_skip_stem: false
+lora_min_channels: 0
+lora_gradient_checkpointing: true
+lora_lr_mult: 1.0
+lora_target_r: 8
+lora_init_r: 12
+lora_tinit: 0
+lora_tfinal: 0
+lora_delta_t: 1
+lora_beta1: 0.85
+lora_beta2: 0.85
+lora_orth_reg_weight: 0.5
+lora_total_step: 0
+lora_alpha_warmup: 3
+lora_oft_block_size: 0
+lora_oft_coft: false
+lora_oft_eps: 6.0e-05
+lora_oft_block_share: false
+lora_boft_block_size: 2
+lora_boft_block_num: 0
+lora_boft_n_butterfly_factor: 2
+lora_hra_apply_gs: false
+lora_layer_decay: 0.85
+lora_ortho_weight: 0.5
+lora_ortho_frequency: 10
+lora_dropout_end: 0.15
+lora_dropout_start_ratio: 0.3
+lora_few_shot_mode: false
+lora_few_shot_teacher: null
+lora_few_shot_dropconnect: 0.1
+lora_few_shot_distill_weight: 0.5
+lora_few_shot_adaptive_rank: true
+lora_few_shot_dropconnect_schedule: cosine
+lora_few_shot_dropconnect_max: 0.3
+lora_few_shot_dropconnect_min: 0.0
+lora_few_shot_gradient_importance_weighted: false
+lora_few_shot_hierarchical_distill: false
+lora_few_shot_distill_layers: null
+lora_few_shot_variational_rank: false
+lora_few_shot_rank_budget: 0.5
+lora_few_shot_adaptive_temperature: false
+lora_few_shot_curriculum_sampling: false
+lora_few_shot_distill_schedule: cosine
+lora_few_shot_distill_weight_max: 1.0
+lora_few_shot_distill_weight_min: 0.1
+lora_few_shot_use_ema_teacher: false
+lora_few_shot_ema_decay: 0.999
+lora_few_shot_response_distill: false
+lora_few_shot_response_distill_weight: 0.3
+lora_few_shot_layerwise_rank: false
+lora_few_shot_hook_cache: true
+moe_num_experts: 4
+moe_top_k: 2
+moe_balance_loss: 1.0
+moe_noise_std: 0.5
+moe_temperature: 1.0
+moe_router_z_loss: 0.1
+moe_weight_threshold: 0.01
+moe_expert_warmup_epochs: 3
+moe_router_lr_scale: 0.5
+moe_collapse_threshold: 0.8
+moe_dynamic_schedule: none
+mot_balance_loss: 0.01
+mot_router_z_loss: 0.01
+mot_sparse_train: false
+moa_local_window_size: 7
+moa_aux_loss_coeff: 0.01
+moa_mot_temperature_factor: 0.97
+moa_mot_min_temperature: 0.3
+molora_num_experts: 0
+molora_top_k: 2
+molora_router_type: linear
+molora_r: 8
+molora_alpha: 16
+molora_balance_loss: 0.01
+molora_router_z_loss: 0.001
+molora_diversity_loss: 0.0
+molora_expert_init: default
+molora_use_rslora: true
+molora_share_moe_registry: true
+molora_capacity_factor: 1.0
+molora_expert_dropout: 0.0
+molora_warmup_steps: 0
+molora_top_k_warmup: 0
+save_dir: /Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/ablation_suite/runs_full_ablation/train
+requested_lora_backend: peft
+effective_lora_backend: peft
+requested_lora_variant: lora
+effective_lora_variant: lora
+effective_lora_type: lora
+requested_lora_init_lora_weights: true
+effective_lora_init_lora_weights: true
+lora_target_audit:
+  peft_type: lora
+  rank: 8
+  valid_count: 81
+  selected_count: 81
+  requested_targets: []
+  exclude_count: 78
+  incompatible_grouped_conv_count: 26
+  filtered_by_user_count: 0
+  selected_sample:
+  - 0.conv
+  - 1.conv
+  - 10.conv
+  - 11.cv1.conv
+  - 11.cv2.conv
+  - 12.routing.routing_network.0
+  - 12.routing.routing_network.2
+  - 15.cv1.conv
+  - 15.cv2.conv
+  - 15.m.0.cv1.conv
+  - 15.m.0.cv2.conv
+  - 15.m.0.cv3.conv
+  - 15.m.0.m.0.cv1.conv
+  - 15.m.0.m.0.cv2.conv
+  - 15.m.0.m.1.cv1.conv
+  - 15.m.0.m.1.cv2.conv
+  - 18.cv1.conv
+  - 18.cv2.conv
+  - 18.m.0.cv1.conv
+  - 18.m.0.cv2.conv
+  incompatible_grouped_conv_sample:
+  - 11.m.0.0.attn.pe.conv
+  - 11.m.0.1.attn.pe.conv
+  - 11.m.1.0.attn.pe.conv
+  - 11.m.1.1.attn.pe.conv
+  - 12.experts.0.conv.depthwise
+  - 12.experts.1.conv.depthwise
+  - 12.experts.2.conv.depthwise
+  - 25.cv3.0.0.0.conv
+  - 25.cv3.0.1.0.conv
+  - 25.cv3.1.0.0.conv
+  - 25.cv3.1.1.0.conv
+  - 25.cv3.2.0.0.conv
+  - 25.cv3.2.1.0.conv
+  - 3.experts.0.conv.depthwise
+  - 3.experts.1.conv.depthwise
+  - 3.experts.2.conv.depthwise
+  - 6.experts.0.conv.depthwise
+  - 6.experts.1.conv.depthwise
+  - 6.experts.2.conv.depthwise
+  - 8.m.0.0.attn.pe.conv
+  filtered_by_user_sample: []

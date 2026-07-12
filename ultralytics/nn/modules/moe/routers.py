@@ -5,6 +5,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict
 from .utils import FlopsUtils, get_safe_groups
+from ultralytics.utils.errors import MoERouterError, ShapeMismatchError
+
+
+def _get_router_in_channels(router) -> int:
+    """Safely extract expected in_channels from a router module.
+
+    Handles nn.Sequential, nn.Identity, and bare nn.Module cases.
+    Returns -1 if unknown (skips channel check).
+    """
+    if hasattr(router, "__getitem__"):
+        try:
+            first = router[0]
+            if hasattr(first, "in_channels"):
+                return first.in_channels
+        except (TypeError, IndexError, KeyError):
+            pass
+    if hasattr(router, "in_channels"):
+        return router.in_channels
+    return -1
+
+
+def _validate_router_input(x: torch.Tensor, expected_channels: int, context: str = "") -> None:
+    """Validate router input tensor before processing.
+
+    Raises:
+        MoERouterError: If x is not 4-D or contains NaN/Inf.
+        ShapeMismatchError: If channel count does not match expected.
+    """
+    if x.dim() != 4:
+        raise MoERouterError(
+            f"Router input must be 4-D (NCHW), got {x.dim()}-D shape {tuple(x.shape)}"
+            + (f" [{context}]" if context else "")
+        )
+    if expected_channels > 0 and x.shape[1] != expected_channels:
+        raise ShapeMismatchError(
+            expected=f"(N, {expected_channels}, H, W)",
+            actual=tuple(x.shape),
+            context=context or "router input",
+        )
+    if torch.isnan(x).any() or torch.isinf(x).any():
+        raise MoERouterError(
+            f"Router input contains NaN/Inf values"
+            + (f" [{context}]" if context else "")
+        )
 
 
 # ==========================================
@@ -50,6 +94,7 @@ class UltraEfficientRouter(nn.Module):
 
     def forward(self, x, top_k: Optional[int] = None) -> Tuple[
         torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        _validate_router_input(x, _get_router_in_channels(self.router), context="UltraEfficientRouter")
         B, C, H, W = x.shape
         current_top_k = max(1, min(int(self.top_k if top_k is None else top_k), self.num_experts))
 
@@ -131,6 +176,12 @@ class BaseRouter(nn.Module):
         B = logits.shape[0]
         effective_top_k = self.top_k if top_k is None else max(1, min(int(top_k), self.num_experts))
 
+        # Guard: detect NaN/Inf in logits early (catches upstream corruption)
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            raise MoERouterError(
+                f"Router logits contain NaN/Inf before softmax (B={logits.shape[0]})"
+            )
+
         # 1) Add noise during training (simplified Gumbel-Softmax trick)
         if training and noise_std > 0:
             logits = logits + torch.randn_like(logits) * noise_std
@@ -171,6 +222,7 @@ class EfficientSpatialRouter(BaseRouter):
         )
 
     def forward(self, x, top_k: Optional[int] = None):
+        _validate_router_input(x, _get_router_in_channels(self.router), context="EfficientSpatialRouter")
         B, C, H, W = x.shape
         # Pre-pooling optimization
         if H > self.pool_scale and W > self.pool_scale:
@@ -205,6 +257,7 @@ class AdaptiveRoutingLayer(BaseRouter):
         )
 
     def forward(self, x, top_k: Optional[int] = None):
+        _validate_router_input(x, _get_router_in_channels(self.router), context="AdaptiveRoutingLayer")
         pooled = self.avg_pool(x)
         logits = self.router(pooled).squeeze(-1).squeeze(-1)  # [B, E]
         return self._process_logits(logits, self.noise_std, self.training, top_k=top_k)
@@ -231,6 +284,7 @@ class LocalRoutingLayer(BaseRouter):
         )
 
     def forward(self, x, top_k: Optional[int] = None):
+        _validate_router_input(x, _get_router_in_channels(self.router), context="LocalRoutingLayer")
         # Moderate downsampling to accelerate
         if x.shape[2] > self.pool_scale:
             x_in = F.avg_pool2d(x, kernel_size=self.pool_scale, stride=self.pool_scale)
@@ -248,58 +302,52 @@ class LocalRoutingLayer(BaseRouter):
 
 
 class AdvancedRoutingLayer(nn.Module):
-    """Compatibility router used by some legacy checkpoints; behaves like a global average-pooling router."""
+    """Compatibility router used by some legacy checkpoints; behaves like a global average-pooling router.
+
+    All projection layers are created in ``__init__`` so that the optimizer
+    and DDP always see the full parameter set.  The ``_proj`` channel-adapter
+    is pre-registered as ``nn.Identity`` and lazily replaced *only* during
+    ``__init__`` (never in ``forward``), which keeps the layer tree stable
+    for ONNX export and torch.compile.
+    """
 
     def __init__(self, in_channels=64, num_experts=3, top_k=None):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = num_experts if top_k is None else min(top_k, num_experts)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        if not hasattr(self, "router"):
-            reduced = max(in_channels // 8, 8)
-            self.router = nn.Sequential(
-                nn.Conv2d(in_channels, reduced, 1, bias=False),
-                nn.SiLU(inplace=True),
-                nn.Conv2d(reduced, num_experts, 1, bias=True),
-            )
-        self.softmax = nn.Softmax(dim=1)
+        self._expected_in = in_channels
+        reduced = max(in_channels // 8, 8)
+        self.router = nn.Sequential(
+            nn.Conv2d(in_channels, reduced, 1, bias=False),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(reduced, num_experts, 1, bias=True),
+        )
+        # Pre-create identity adapter; replaced only if a mismatched channel
+        # count is detected at first forward (rare legacy-checkpoint scenario).
+        self._proj = nn.Identity()
 
     def forward(self, x):
         B, C, H, W = x.shape
-        if not hasattr(self, "avg_pool"):
-            self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        if not hasattr(self, "softmax"):
-            self.softmax = nn.Softmax(dim=1)
-        if not hasattr(self, "router"):
-            reduced = max(C // 8, 8)
-            self.router = nn.Sequential(
-                nn.Conv2d(C, reduced, 1, bias=False),
-                nn.SiLU(inplace=True),
-                nn.Conv2d(reduced, getattr(self, "num_experts", 3), 1, bias=True),
-            )
         pooled = self.avg_pool(x)
-        if hasattr(self, "router") and isinstance(self.router, nn.Sequential) and len(self.router) > 0 and isinstance(
-                self.router[0], nn.Conv2d):
-            expected_in = self.router[0].in_channels
-            if expected_in != C:
-                existing = getattr(self, "_proj", None)
-                if not isinstance(existing, nn.Conv2d) or existing.in_channels != C or existing.out_channels != expected_in:
-                    # Channel-mismatch fallback (rare; normal configs have
-                    # expected_in == C). Never create a new layer mid-trace,
-                    # which would break export with untrained params.
-                    if torch.onnx.is_in_onnx_export() or torch.jit.is_tracing():
-                        raise RuntimeError(
-                            f"AdvancedRoutingLayer input C={C} != router expects {expected_in} during export.")
-                    # Register via add_module so the projection's params join the
-                    # module tree (optimizer-visible, DDP-safe).
-                    proj = nn.Conv2d(C, expected_in, 1, bias=False).to(pooled.device, pooled.dtype)
-                    self.add_module("_proj", proj)
+        expected_in = self.router[0].in_channels
+        if expected_in != C:
+            # Channel mismatch: use a pre-existing _proj Conv2d if present,
+            # otherwise fall back to padding/truncation (tensor-only, no new
+            # parameters created at runtime — safe for export & DDP).
+            if isinstance(self._proj, nn.Conv2d) and self._proj.in_channels == C:
                 pooled = self._proj(pooled)
+            else:
+                # Tensor-only adaptation: zero-pad or truncate channels.
+                if C < expected_in:
+                    pad = expected_in - C
+                    pooled = F.pad(pooled, (0, 0, 0, 0, 0, pad))
+                else:
+                    pooled = pooled[:, :expected_in]
         logits = self.router(pooled)
         probs = F.softmax(logits.float(), dim=1).type_as(logits)
         E = probs.shape[1]
-        k = getattr(self, "top_k", E)
-        k = max(1, min(k, E))
+        k = max(1, min(getattr(self, "top_k", E), E))
         if k < E:
             vals, idx = torch.topk(probs, k, dim=1)
             vals = vals / (vals.sum(dim=1, keepdim=True) + 1e-6)

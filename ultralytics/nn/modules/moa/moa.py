@@ -33,9 +33,50 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 from ultralytics.nn.modules.conv import Conv
 
+
+def _init_conv_weights(module: nn.Module) -> None:
+    """Shared Conv2d weight initialisation for MoA blocks.
+
+    Uses truncated-normal (std=0.02) for weights and zeros for bias,
+    matching the original per-class ``_init_weights`` methods.
+    """
+    for m in module.modules():
+        if isinstance(m, nn.Conv2d):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+
+# Default random-feature seed for Performer-style linear-attention heads.
+# The value 0x5F3759DF is the famous fast inverse-sqrt magic constant from
+# Quake III Arena; repurposed here as a deterministic, well-distributed seed
+# that guarantees reproducible random-feature matrices across runs.
+_DEFAULT_RF_SEED = 0x5F3759DF
+
+
+def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
+    """Average a tensor across DDP ranks (gradient-preserving, no-op on 1 GPU).
+
+    MoA DDP aux-loss sync: local, dependency-free copy of MoE's
+    ``moe.loss.all_reduce_mean`` — duplicated here (rather than imported)
+    so MoA keeps zero compile-time dependency on the MoE package (see the
+    ``get_safe_groups`` fix above for the same rationale). Reduces in
+    float32 to avoid precision loss when the model runs under fp16/bf16 AMP.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return tensor
+    world = dist.get_world_size()
+    if world <= 1:
+        return tensor
+    orig_dtype = tensor.dtype
+    out = tensor.float().clone()
+    dist.all_reduce(out, op=dist.ReduceOp.SUM)
+    out = out / world
+    return out.to(orig_dtype)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -220,7 +261,7 @@ class _GlobalAttnHead(nn.Module):
     _BLEND_WINDOW: int = 64
 
     def __init__(self, dim: int, num_heads: int, head_dim: Optional[int] = None,
-                 nb_features: int = 64, rf_seed: int = 0x5F3759DF):
+                 nb_features: int = 64, rf_seed: int = _DEFAULT_RF_SEED):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = head_dim or max(dim // num_heads, 16)
@@ -235,10 +276,21 @@ class _GlobalAttnHead(nn.Module):
         # Orthogonal random features for the Performer approximation.
         # Per-block seed keeps bases diverse across layers while remaining
         # deterministic for checkpoint resume and multi-process training.
+        # NOTE: QR and Generator run only in __init__ (never in forward), so
+        # they are invisible to ONNX tracing / TorchScript export.  The
+        # resulting matrix is stored as a persistent buffer and simply loaded
+        # at export time.
         eff_nb = min(self.nb_features, self.head_dim)  # QR yields ≤ head_dim cols
-        gen = torch.Generator().manual_seed(rf_seed)
-        rf = torch.randn(self.head_dim, self.head_dim, generator=gen, dtype=torch.float32)
-        rf, _ = torch.linalg.qr(rf)        # [hd, hd] orthogonal
+        with torch.no_grad():
+            gen = torch.Generator().manual_seed(rf_seed)
+            rf = torch.randn(self.head_dim, self.head_dim, generator=gen, dtype=torch.float32)
+            try:
+                rf, _ = torch.linalg.qr(rf)        # [hd, hd] orthogonal
+            except RuntimeError:
+                # Fallback: Gram-Schmidt via SVD if QR fails (rare, but
+                # keeps construction robust on older CUDA / MPS drivers).
+                u, _, _ = torch.linalg.svd(rf, full_matrices=False)
+                rf = u
         self.register_buffer("_rf_matrix", rf[:eff_nb].contiguous(), persistent=True)
 
     def _get_rf(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -413,8 +465,10 @@ class MoABlock(nn.Module):
         aux_loss_coeff: float = 0.01,
         block_index: int = 0,
         local_window_size: int = 7,
+        sequential_heads: bool = False,
     ):
         super().__init__()
+        self.sequential_heads = sequential_heads
         assert num_heads % self.NUM_GROUPS == 0, (
             f"num_heads ({num_heads}) must be divisible by NUM_GROUPS ({self.NUM_GROUPS})"
         )
@@ -453,11 +507,7 @@ class MoABlock(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        _init_conv_weights(self)
 
     # ── RoutedModule protocol ───────────────────────────────────────────
     @property
@@ -501,12 +551,18 @@ class MoABlock(nn.Module):
         w_g = weights[:, 2:3]
 
         # ── Attention head outputs ────────────────────────────────────────
-        out_l = self.local_head(x)
-        out_r = self.region_head(x)
-        out_g = self.global_head(x)
-
-        # ── Soft mixture ─────────────────────────────────────────────────
-        mixed = w_l * out_l + w_r * out_r + w_g * out_g   # [B, C, H, W]
+        if self.sequential_heads:
+            # Sequential path: compute and accumulate one head at a time.
+            # Mathematically identical to the default path; useful for
+            # memory-constrained environments and ONNX export validation.
+            mixed = w_l * self.local_head(x)
+            mixed = mixed + w_r * self.region_head(x)
+            mixed = mixed + w_g * self.global_head(x)
+        else:
+            out_l = self.local_head(x)
+            out_r = self.region_head(x)
+            out_g = self.global_head(x)
+            mixed = w_l * out_l + w_r * out_r + w_g * out_g   # [B, C, H, W]
         mixed = self.attn_drop(self.fusion(mixed))
 
         # ── Residual + layer-scale ────────────────────────────────────────
@@ -571,11 +627,15 @@ class C2fMoA(nn.Module):
 
         # ensure num_heads divisible by NUM_GROUPS=3
         eff_heads = num_heads
-        while eff_heads % MoABlock.NUM_GROUPS != 0:
+        _max_iter = 256
+        while eff_heads % MoABlock.NUM_GROUPS != 0 and _max_iter > 0:
             eff_heads += 1
+            _max_iter -= 1
         # ensure head_dim ≥ 16
-        while self.c // eff_heads < 16 and eff_heads > MoABlock.NUM_GROUPS:
+        _max_iter = 256
+        while self.c // eff_heads < 16 and eff_heads > MoABlock.NUM_GROUPS and _max_iter > 0:
             eff_heads -= MoABlock.NUM_GROUPS
+            _max_iter -= 1
         eff_heads = max(eff_heads, MoABlock.NUM_GROUPS)
 
         self.m = nn.ModuleList(
@@ -706,11 +766,7 @@ class NeckMoAFusion(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        _init_conv_weights(self)
 
     def forward(self, hi: torch.Tensor, lo: torch.Tensor) -> torch.Tensor:
         B, _, H, W = hi.shape
@@ -825,3 +881,12 @@ def collect_moa_aux_loss(model: nn.Module) -> torch.Tensor:
             if isinstance(l, torch.Tensor) and l.requires_grad:
                 total = l if total is None else total + l
     return total if total is not None else torch.zeros(1, device=_aux_loss_device(model))
+
+
+__all__ = [
+    "MoABlock",
+    "C2fMoA",
+    "NeckMoAFusion",
+    "anneal_moa_temperature",
+    "collect_moa_aux_loss",
+]

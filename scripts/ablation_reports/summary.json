@@ -1,0 +1,232 @@
+{
+  "meta": {
+    "generator": "ablation_peft_visualize.py",
+    "repo_root": "/Users/gatilin/PycharmProjects/YOLO-Master-v0708",
+    "experiments_found": 4
+  },
+  "experiments": [
+    {
+      "name": "E1_RankAllocation",
+      "source": "/Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/e1_quick_results.json",
+      "num_variants": 1,
+      "variants": [
+        {
+          "experiment": "E1",
+          "variant": "frequency",
+          "ok": true,
+          "params_total": 3965124,
+          "params_trainable": 1270760,
+          "trainable_pct": 32.0484,
+          "elapsed_sec": 49.5,
+          "final_metrics": {
+            "metrics/precision(B)": 0.0,
+            "metrics/recall(B)": 0.0,
+            "metrics/mAP50(B)": 0.0,
+            "metrics/mAP50-95(B)": 0.0,
+            "fitness": 0.0
+          },
+          "extra": {
+            "rank_info": "",
+            "expert_ranks": [
+              14,
+              7,
+              7,
+              4
+            ],
+            "wrapped_layers": 93
+          }
+        }
+      ]
+    },
+    {
+      "name": "E2_RouterCalibration",
+      "source": "/Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/e2_router_calibration_results.json",
+      "num_variants": 3,
+      "variants": [
+        {
+          "experiment": "E2",
+          "variant": "baseline",
+          "ok": true,
+          "params_total": 3965124,
+          "params_trainable": 1270760,
+          "trainable_pct": 32.0484,
+          "elapsed_sec": 128.5,
+          "final_metrics": {
+            "metrics/precision(B)": 0.0,
+            "metrics/recall(B)": 0.0,
+            "metrics/mAP50(B)": 0.0,
+            "metrics/mAP50-95(B)": 0.0,
+            "fitness": 0.0
+          },
+          "extra": {
+            "has_calibration": false,
+            "router_calib_rank": null
+          }
+        },
+        {
+          "experiment": "E2",
+          "variant": "calibrated_r4",
+          "ok": true,
+          "params_total": 4001376,
+          "params_trainable": 1307012,
+          "trainable_pct": 32.6641,
+          "elapsed_sec": 90.9,
+          "final_metrics": {
+            "metrics/precision(B)": 0.0,
+            "metrics/recall(B)": 0.0,
+            "metrics/mAP50(B)": 0.0,
+            "metrics/mAP50-95(B)": 0.0,
+            "fitness": 0.0
+          },
+          "extra": {
+            "has_calibration": true,
+            "router_calib_rank": null
+          }
+        },
+        {
+          "experiment": "E2",
+          "variant": "calibrated_r8",
+          "ok": true,
+          "params_total": 4037628,
+          "params_trainable": 1343264,
+          "trainable_pct": 33.2686,
+          "elapsed_sec": 167.7,
+          "final_metrics": {
+            "metrics/precision(B)": 0.0,
+            "metrics/recall(B)": 0.0,
+            "metrics/mAP50(B)": 0.0,
+            "metrics/mAP50-95(B)": 0.0,
+            "fitness": 0.0
+          },
+          "extra": {
+            "has_calibration": true,
+            "router_calib_rank": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "E3_ExpertLoad",
+      "source": "/Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/e3_viz_outputs/e3_summary.json",
+      "num_variants": 2,
+      "variants": [
+        {
+          "experiment": "E3",
+          "variant": "uniform",
+          "ok": true,
+          "params_total": 0,
+          "params_trainable": 0,
+          "trainable_pct": 0.0,
+          "elapsed_sec": 0.0,
+          "final_metrics": {},
+          "extra": {
+            "avg_usage": [
+              0.2916666567325592,
+              0.25537633895874023,
+              0.20295698940753937,
+              0.25
+            ],
+            "gini": 0.06787633895874023,
+            "ranks": [
+              8,
+              8,
+              8,
+              8
+            ],
+            "num_layers": 93
+          }
+        },
+        {
+          "experiment": "E3",
+          "variant": "frequency",
+          "ok": true,
+          "params_total": 0,
+          "params_trainable": 0,
+          "trainable_pct": 0.0,
+          "elapsed_sec": 0.0,
+          "final_metrics": {},
+          "extra": {
+            "avg_usage": [
+              0.2715053856372833,
+              0.2661290466785431,
+              0.2110215127468109,
+              0.25134408473968506
+            ],
+            "gini": 0.049059152603149414,
+            "ranks": [
+              9,
+              8,
+              7,
+              8
+            ],
+            "num_layers": 93
+          }
+        }
+      ]
+    },
+    {
+      "name": "EVAL_Unified",
+      "source": "/Users/gatilin/PycharmProjects/YOLO-Master-v0708/scripts/eval_moe_peft_results_combined.json",
+      "num_variants": 3,
+      "variants": [
+        {
+          "experiment": "EVAL",
+          "variant": "molora_baseline",
+          "ok": true,
+          "params_total": 3965124,
+          "params_trainable": 1270760,
+          "trainable_pct": 32.0484,
+          "elapsed_sec": 168.5,
+          "final_metrics": {
+            "metrics/mAP50-95(B)": 0.0,
+            "metrics/mAP50-95_std": 0.0
+          },
+          "extra": {
+            "n_seeds": 1,
+            "agg_mean": 0.0,
+            "agg_std": 0.0,
+            "wrapped_layers": 93
+          }
+        },
+        {
+          "experiment": "EVAL",
+          "variant": "molora_calib_r4",
+          "ok": true,
+          "params_total": 4001376,
+          "params_trainable": 1307012,
+          "trainable_pct": 32.6641,
+          "elapsed_sec": 131.9,
+          "final_metrics": {
+            "metrics/mAP50-95(B)": 0.0,
+            "metrics/mAP50-95_std": 0.0
+          },
+          "extra": {
+            "n_seeds": 1,
+            "agg_mean": 0.0,
+            "agg_std": 0.0,
+            "wrapped_layers": 93
+          }
+        },
+        {
+          "experiment": "EVAL",
+          "variant": "molora_freq_rank",
+          "ok": true,
+          "params_total": 3965124,
+          "params_trainable": 1270760,
+          "trainable_pct": 32.0484,
+          "elapsed_sec": 137.4,
+          "final_metrics": {
+            "metrics/mAP50-95(B)": 0.0,
+            "metrics/mAP50-95_std": 0.0
+          },
+          "extra": {
+            "n_seeds": 1,
+            "agg_mean": 0.0,
+            "agg_std": 0.0,
+            "wrapped_layers": 93
+          }
+        }
+      ]
+    }
+  ]
+}

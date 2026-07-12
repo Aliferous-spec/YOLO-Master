@@ -639,7 +639,16 @@ def apply_lora(
             try:
                 decision = planner.plan(model.model if hasattr(model, "model") else model, config)
             except RefusalError as exc:
-                LOGGER.warning(f"[Planner] RefusalError: {exc}")
+                LOGGER.warning(
+                    f"[Planner] RefusalError: {exc}. "
+                    f"Falling back to full fine-tuning (Full-SFT). "
+                    f"This is a valid planning decision, not an error."
+                )
+                # Mark the model so downstream code knows Planner ran but refused.
+                if hasattr(model, 'model'):
+                    model.model.lora_planner_decision = "REFUSED"
+                else:
+                    model.lora_planner_decision = "REFUSED"
                 return model  # graceful fallback to Full-SFT
 
             planner_decision = decision

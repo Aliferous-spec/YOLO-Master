@@ -18,6 +18,8 @@ from typing import Any, Callable, Iterator
 import torch
 import torch.nn as nn
 
+from ultralytics.utils import LOGGER
+
 from .api import collect_all_moe_info, get_routing_weights_unified
 from .utils import is_core_moe_block
 
@@ -78,7 +80,7 @@ def quantize_moe_model(
     plan = get_quantization_plan(model)
     routing_params = sum(1 for v in plan.values() if v == "fp16")
     expert_params = sum(1 for v in plan.values() if v == "int8")
-    print(f"[Quantize] Plan: {routing_params} routing params (fp16), "
+    LOGGER.info(f"[Quantize] Plan: {routing_params} routing params (fp16), "
           f"{expert_params} expert/other params (int8)")
 
     if backend == "onnx":
@@ -119,7 +121,7 @@ def _quantize_onnx(
     try:
         from onnxruntime.quantization import quantize_dynamic, QuantType, quantize_static, CalibrationDataReader
     except ImportError:
-        print("[Quantize] onnxruntime not installed — returning unquantized ONNX")
+        LOGGER.warning("[Quantize] onnxruntime not installed — returning unquantized ONNX")
         buffer.seek(0)
         output_path.write_bytes(buffer.read())
         return output_path
@@ -164,7 +166,7 @@ def _quantize_onnx(
         )
 
     temp_path.unlink(missing_ok=True)
-    print(f"[Quantize] ONNX quantized model saved to {output_path}")
+    LOGGER.info(f"[Quantize] ONNX quantized model saved to {output_path}")
     return output_path
 
 
@@ -184,10 +186,10 @@ def _quantize_torch(model: nn.Module, plan: dict[str, str]) -> nn.Module:
     if non_routing_linears:
         from torch.quantization import quantize_dynamic
         q_model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
-        print(f"[Quantize] Torch dynamic quantization applied to {len(non_routing_linears)} Linear layers")
+        LOGGER.info(f"[Quantize] Torch dynamic quantization applied to {len(non_routing_linears)} Linear layers")
         return q_model
     else:
-        print("[Quantize] No quantizable Linear layers found — model unchanged")
+        LOGGER.info("[Quantize] No quantizable Linear layers found — model unchanged")
         return model
 
 

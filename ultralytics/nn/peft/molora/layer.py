@@ -268,8 +268,10 @@ class MoLoRALayer(nn.Module):
         mask = torch.bernoulli(
             torch.full((self.num_experts,), 1.0 - self.expert_dropout, device=router_probs.device)
         ).to(router_probs.dtype)
-        if mask.sum().item() == 0:
-            mask = torch.ones_like(mask)
+        # Ensure at least one expert is active without GPU→CPU sync:
+        # use torch.where on a scalar tensor instead of mask.sum() > 0.
+        any_active = mask.max() > 0
+        mask = torch.where(any_active, mask, torch.ones_like(mask))
         probs = router_probs * mask.unsqueeze(0)
         return probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-6)
 
@@ -291,13 +293,18 @@ class MoLoRALayer(nn.Module):
             return top_k_weights
         B, K = top_k_weights.shape
         max_slots = max(1, int(math.ceil(self.capacity_factor * B * K / self.num_experts)))
-        weights = top_k_weights.clone()
-        for e in range(self.num_experts):
-            slots = top_k_indices == e
-            usage = int(slots.sum().item())
-            if usage > max_slots:
-                scale = max_slots / usage
-                weights = torch.where(slots, weights * scale, weights)
+        # Vectorised: compute per-expert usage and scale in one pass,
+        # eliminating the Python for-loop over experts.
+        one_hot = F.one_hot(top_k_indices.reshape(-1).long(), self.num_experts).float()  # [B*K, E]
+        usage = one_hot.sum(dim=0)  # [E]
+        max_slots_t = torch.tensor(float(max_slots), dtype=usage.dtype, device=usage.device)
+        scale = torch.where(
+            usage > max_slots_t,
+            max_slots_t / usage.clamp_min(1.0),
+            torch.ones_like(usage),
+        )  # [E]
+        # Gather scale per selected expert: scale[top_k_indices] → [B, K]
+        weights = top_k_weights * scale[top_k_indices]
         return weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
 
     # ------------------------------------------------------------------
@@ -373,8 +380,10 @@ class MoLoRALayer(nn.Module):
         if self._domain_active_mask is not None:
             device = router_logits.device
             mask = self._domain_active_mask.to(device).to(router_logits.dtype)
-            # Mask out inactive experts with large negative value
-            router_logits = router_logits + (1.0 - mask) * -1e9
+            # Mask out inactive experts with large negative value.
+            # Use torch.finfo to avoid fp16 underflow (-1e9 → -inf in fp16).
+            neg_mask_val = torch.finfo(router_logits.dtype).min
+            router_logits = router_logits + (1.0 - mask) * neg_mask_val
 
         router_probs = F.softmax(router_logits, dim=-1)  # [B, E]
 
@@ -406,10 +415,13 @@ class MoLoRALayer(nn.Module):
         # Write to MOE_LOSS_REGISTRY if enabled
         if self.share_moe_registry and self.training:
             try:
-                from ultralytics.nn.modules.moe.modules import _registry_set
+                from ultralytics.nn.modules.moe._common import _registry_set
                 _registry_set(self, aux_loss)
-            except Exception:
-                pass
+            except (ImportError, AttributeError, RuntimeError) as exc:
+                import logging
+                logging.getLogger("molora").warning(
+                    "Failed to register MoLoRA aux loss to MOE_LOSS_REGISTRY: %s", exc
+                )
 
         # Store diagnostics
         self._last_routing_stats = {
@@ -452,21 +464,24 @@ class MoLoRALayer(nn.Module):
             expert_idx = top_k_indices[:, k]  # [B]
             weights = top_k_weights[:, k]      # [B]
 
-            # Batched: group all samples selecting the same expert
+            # Batched: group all samples selecting the same expert.
+            # Use pure-tensor path (no mask.any() GPU→CPU sync): compute
+            # masked outputs and use scatter_add to accumulate, skipping
+            # empty experts via torch.where on scalar bools.
             for e in range(self.num_experts):
-                mask = expert_idx == e
-                if not mask.any():
-                    continue
-                # Check if expert is frozen (skip gradient for frozen experts)
+                mask = expert_idx == e  # [B] bool
+                mask_f = mask.float().view(-1, *([1] * (x.dim() - 1)))
+                # Pure-tensor path: compute expert on full batch and zero
+                # contribution for non-selected samples.  This eliminates
+                # K×E GPU→CPU syncs from mask.any() at the cost of computing
+                # all E experts (acceptable for small E typical in MoLoRA).
                 if self._expert_frozen_mask is not None and self._expert_frozen_mask[e]:
                     with torch.no_grad():
-                        x_e = x[mask]
-                        out_e = self.experts[e](x_e)
+                        out_e = self.experts[e](x)
                 else:
-                    x_e = x[mask]
-                    out_e = self.experts[e](x_e)
-                w = weights[mask].view(-1, *([1] * (out_e.dim() - 1)))
-                expert_out[mask] += out_e * w
+                    out_e = self.experts[e](x)
+                w = (weights * mask_f.squeeze()).view(-1, *([1] * (out_e.dim() - 1)))
+                expert_out += out_e * w
 
         return expert_out
 

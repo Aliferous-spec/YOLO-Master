@@ -7,6 +7,7 @@ registry, snapshot recording, robust deepcopy, and the consolidated import block
 """
 import os
 import math
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -233,7 +234,7 @@ def _robust_deepcopy(obj, memo):
             except RuntimeError as e:
                 # Fallback: if deepcopy fails on a specific attribute, try to skip or reset it
                 if "Only Tensors created explicitly" in str(e):
-                    print(f"WARNING: Skipped deepcopy for attribute '{k}' in {cls.__name__} due to non-leaf tensor error.")
+                    logging.getLogger("ultralytics").warning(f"Skipped deepcopy for attribute '{k}' in {cls.__name__} due to non-leaf tensor error.")
                     setattr(new_obj, k, _detached_zero_like(v))
                 else:
                     raise e

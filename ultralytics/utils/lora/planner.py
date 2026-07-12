@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 
 from ultralytics.utils import LOGGER
+from ultralytics.utils.errors import PEFTRefusalError
 import weakref
 
 # Weak-key cache: automatically invalidated when the model object is garbage-collected.
@@ -27,11 +28,15 @@ import weakref
 _fingerprint_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-class RefusalError(Exception):
+class RefusalError(PEFTRefusalError):
     """Raised when the PEFT Planner refuses a configuration.
 
     This is a valid planning decision, not a failure. The caller should
     catch this and fall back to full fine-tuning (Full-SFT).
+
+    Now inherits from PEFTRefusalError (ultralytics.utils.errors) to unify
+    the exception hierarchy. Existing code catching RefusalError continues
+    to work; new code can catch PEFTRefusalError for the same effect.
     """
     pass
 

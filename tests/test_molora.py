@@ -505,15 +505,17 @@ class TestUtils:
         assert alloc == {}
 
     def test_mark_only_molora_as_trainable(self):
-        class M(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.conv = nn.Conv2d(3, 3, 1)
-                self.lora_A = nn.Parameter(torch.randn(3, 3))
-        m = M()
+        from ultralytics.nn.peft.molora.layer import MoLoRALayer
+        base = nn.Conv2d(3, 8, 1)
+        layer = MoLoRALayer(base, r=4, alpha=8, num_experts=2, top_k=1)
+        m = nn.Sequential(layer)
         mark_only_molora_as_trainable(m)
-        assert m.conv.weight.requires_grad is False
-        assert m.lora_A.requires_grad is True
+        # base_layer params frozen
+        assert layer.base_layer.weight.requires_grad is False
+        # adapter params trainable
+        for name, p in layer.named_parameters():
+            if "base_layer" not in name:
+                assert p.requires_grad, name
 
     def test_count_parameters(self):
         m = nn.Sequential(
@@ -607,10 +609,10 @@ class TestDynamicRouting:
         # Step 0: should return 1
         assert layer._current_top_k() == 1
         # After 5 steps: should return 1 + (2-1)*5/10 = 1 (integer floor)
-        layer._step_count_cpu = 5
+        layer._step_count.fill_(5)
         assert layer._current_top_k() == 1
         # After 10 steps: should return 2
-        layer._step_count_cpu = 10
+        layer._step_count.fill_(10)
         assert layer._current_top_k() == 2
 
     def test_expert_dropout(self):

@@ -133,16 +133,29 @@ def allocate_domain_experts(
 def mark_only_molora_as_trainable(model: nn.Module) -> None:
     """Freeze all parameters except MoLoRA adapter parameters.
 
-    MoLoRA parameter names contain:
-      - lora_A, lora_B  (expert low-rank matrices)
-      - router          (routing network)
-      - molora          (general molora prefix)
+    Uses isinstance checking on module types instead of substring matching
+    on parameter names to avoid accidentally unfreezing non-MoLoRA routers
+    (e.g. MoE routing layers that also contain 'router' in their names).
     """
-    for name, param in model.named_parameters():
-        if any(k in name for k in ("lora_A", "lora_B", "router", "molora")):
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
+    # Lazy import to avoid circular dependency (layer.py / moe_aware.py import utils.py)
+    from ultralytics.nn.peft.molora.layer import MoLoRALayer
+    try:
+        from ultralytics.nn.peft.molora.moe_aware import MoLoRAMoEAwareLayer
+        molora_types = (MoLoRALayer, MoLoRAMoEAwareLayer)
+    except ImportError:
+        molora_types = (MoLoRALayer,)
+
+    # Freeze everything first
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Unfreeze only MoLoRA adapter parameters (skip base_layer which holds
+    # the original frozen weights).  recurse=True to reach nested experts.
+    for module in model.modules():
+        if isinstance(module, molora_types):
+            for pname, param in module.named_parameters(recurse=True):
+                if "base_layer" not in pname:
+                    param.requires_grad = True
 
 
 def count_parameters(model: nn.Module) -> Dict[str, int]:

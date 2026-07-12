@@ -1097,7 +1097,10 @@ class A2C2fMoE(A2C2f):
                 mlp = getattr(block, "mlp", None)
                 if mlp is not None and hasattr(mlp, "get_gflops"):
                     sub = mlp.get_gflops(input_shape)
-                    total += float(sub.get('total_gflops', 0.0))
+                    if isinstance(sub, dict):
+                        total += float(sub.get('total_gflops', 0.0))
+                    elif isinstance(sub, (int, float)):
+                        total += float(sub)
         return {'total_gflops': total}
 
     def __deepcopy__(self, memo):

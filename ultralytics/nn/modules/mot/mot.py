@@ -49,11 +49,96 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 from ultralytics.nn.modules.conv import Conv
-from ultralytics.nn.modules.moe.loss import differentiable_balance_loss
+from ultralytics.nn.modules.moe.loss import differentiable_balance_loss as _moe_balance_loss
 from ultralytics.nn.modules.moe.utils import get_safe_groups as _safe_groups
 from ultralytics.utils import LOGGER
+
+
+def _roll_via_cat(x: torch.Tensor, shift: int, dims: tuple) -> torch.Tensor:
+    """ONNX-compatible alternative to ``torch.roll`` for 2-D spatial shifts.
+
+    ``torch.roll`` has inconsistent ONNX Runtime support across versions.
+    This function replicates cyclic shift via ``torch.cat`` + ``index_select``,
+    which traces cleanly.  Supports symmetric shifts on dims (1, 2) and
+    handles both positive and negative shift values.
+    """
+    if shift == 0:
+        return x
+    for dim in dims:
+        n = x.size(dim)
+        s = shift % n  # Python modulo handles negative shifts correctly
+        if s == 0:
+            continue
+        idx = torch.arange(n, device=x.device)
+        # torch.roll(x, shifts=s, dim) → result[i] = input[(i - s) % n]
+        # So select indices: [n-s, n-s+1, ..., n-1, 0, 1, ..., n-s-1]
+        rolled_idx = torch.cat([idx[n - s:], idx[:n - s]])
+        x = x.index_select(dim, rolled_idx)
+    return x
+
+
+def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
+    """Average a tensor across DDP ranks (gradient-preserving, no-op on 1 GPU).
+
+    Local, dependency-free copy of MoE's ``moe.loss.all_reduce_mean`` —
+    duplicated here (rather than imported) so MoT keeps zero compile-time
+    dependency on the MoE package. Reduces in float32 to avoid precision
+    loss when the model runs under fp16/bf16 AMP.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return tensor
+    world = dist.get_world_size()
+    if world <= 1:
+        return tensor
+    orig_dtype = tensor.dtype
+    out = tensor.float().clone()
+    dist.all_reduce(out, op=dist.ReduceOp.SUM)
+    out = out / world
+    return out.to(orig_dtype)
+
+
+def differentiable_balance_loss(
+    router_probs: torch.Tensor,
+    expert_usage: torch.Tensor,
+    num_experts: int,
+    target_usage: Optional[torch.Tensor] = None,
+    reduce_ddp: bool = False,
+) -> torch.Tensor:
+    """GShard balance loss with gradient flowing to the router via `importance`.
+
+    Local copy of ``moe.loss.differentiable_balance_loss`` — kept in sync
+    with the original. See the MoE version for full documentation.
+    """
+    probs = router_probs.reshape(
+        router_probs.shape[0], router_probs.shape[1], -1
+    ).mean(-1) if router_probs.dim() == 4 else router_probs.reshape(-1, num_experts)
+    importance = probs.mean(dim=0)  # keeps grad
+    importance = importance / importance.sum().clamp_min(1e-6)
+
+    usage = expert_usage.reshape(-1).float().detach()
+    usage = usage / usage.sum().clamp_min(1e-6)
+    if reduce_ddp:
+        importance = all_reduce_mean(importance)
+        usage = all_reduce_mean(usage)
+
+    if target_usage is not None:
+        w = target_usage.reshape(-1).float()
+        w = w / w.sum().clamp_min(1e-6)
+        usage = usage * w * num_experts  # uniform w -> unchanged
+
+    return num_experts * torch.sum(importance * usage)
+
+# explicit __all__ so `from mot import *` only exposes public API
+# symbols, not internal helpers like _LocalConvTransformerExpert, _MoTRouter, etc.
+__all__ = (
+    "MoTBlock",
+    "C2fMoT",
+    "collect_mot_aux_loss",
+    "anneal_mot_temperature",
+)
 
 # Maximum token count for explicit O(N²) SDPA fallback (PyTorch < 2.0).
 _SDPA_EXPLICIT_MAX_TOKENS = 4096
@@ -279,9 +364,14 @@ class _WindowTransformerExpert(nn.Module):
         H, W = x.shape[1], x.shape[2]
 
         # Cyclic shift (fixed at construction → deterministic & trace-stable)
+        # Use cat-based roll for ONNX compatibility (torch.roll has limited
+        # ONNX Runtime support across versions).
         shift = self.shift_size
         if shift > 0:
-            x = torch.roll(x, shifts=(-shift, -shift), dims=(1, 2))
+            if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export():
+                x = _roll_via_cat(x, -shift, dims=(1, 2))
+            else:
+                x = torch.roll(x, shifts=(-shift, -shift), dims=(1, 2))
 
         # ── Window Attention ─────────────────────────────────────────────
         xn = self.norm1(x)
@@ -301,7 +391,10 @@ class _WindowTransformerExpert(nn.Module):
 
         # Reverse shift
         if shift > 0:
-            attn_out = torch.roll(attn_out, shifts=(shift, shift), dims=(1, 2))
+            if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export():
+                attn_out = _roll_via_cat(attn_out, shift, dims=(1, 2))
+            else:
+                attn_out = torch.roll(attn_out, shifts=(shift, shift), dims=(1, 2))
 
         # Remove padding
         attn_out = attn_out[:, :H_orig, :W_orig, :]
@@ -310,7 +403,10 @@ class _WindowTransformerExpert(nn.Module):
         # Without this, the shifted input x is added to the un-shifted attention
         # output, causing a cyclic spatial misalignment in all shifted blocks.
         if shift > 0:
-            x = torch.roll(x, shifts=(shift, shift), dims=(1, 2))
+            if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export():
+                x = _roll_via_cat(x, shift, dims=(1, 2))
+            else:
+                x = torch.roll(x, shifts=(shift, shift), dims=(1, 2))
         x = x[:, :H_orig, :W_orig, :]
         x = x + self.ls1 * attn_out
 
@@ -436,11 +532,20 @@ class _DeformableTransformerExpert(nn.Module):
         # grid_sample expects [B, C, H_out, W_out] query grid
         # Here H_out=N, W_out=np  → treat N*np as 2D grid
         # Reshape locs → [B*nh, N, np, 2] already correct for grid_sample
+        # fp16 safety: grid_sample has known precision issues with fp16
+        # sampling coordinates; force float32 for the sampling operation
+        # and cast back to the original dtype afterward.
+        orig_dtype = v_4d.dtype
+        if orig_dtype != torch.float32:
+            v_4d = v_4d.float()
+            locs = locs.float()
         sampled = F.grid_sample(
             v_4d,                                              # [B*nh, hd, H, W]
             locs,                                              # [B*nh, N, np, 2]
             mode="bilinear", align_corners=self.align_corners, padding_mode="zeros"
         )                                                      # [B*nh, hd, N, np]
+        if orig_dtype != torch.float32:
+            sampled = sampled.to(orig_dtype)
 
         # sampled: [B*nh, hd, N, np] → [B, nh, N, np, hd]
         sampled = sampled.reshape(B, nh, hd, N, np_).permute(0, 3, 1, 4, 2).contiguous()
@@ -458,8 +563,11 @@ class _DeformableTransformerExpert(nn.Module):
         x_flat = x.flatten(2).transpose(1, 2)  # [B, N, C]
 
         # ── Deformable Attention ─────────────────────────────────────────
-        q = self.q_proj(self.norm1(x_flat))
-        attn_out = self.drop(self._deform_attn(q, self.norm1(x_flat), H, W))
+        # norm1 computed once and reused for both q and value (avoids 2-5%
+        # redundant LayerNorm compute noted in P1 audit).
+        xn = self.norm1(x_flat)
+        q = self.q_proj(xn)
+        attn_out = self.drop(self._deform_attn(q, xn, H, W))
         x_flat = x_flat + self.ls1 * attn_out
 
         # ── FFN ──────────────────────────────────────────────────────────
@@ -497,7 +605,9 @@ class _MoTRouter(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
         self.use_spatial = use_spatial
-        self.temperature = max(temperature, 0.1)
+        # Register temperature as a buffer so checkpoint save/restore
+        # preserves annealing progress (Python float would be lost).
+        self.register_buffer("temperature", torch.tensor(max(temperature, 0.1)), persistent=True)
         self.exploration_eps = exploration_eps
 
         hidden = max(dim // 8, num_experts * 4)
@@ -962,24 +1072,23 @@ def collect_mot_aux_loss(model: nn.Module) -> torch.Tensor:
     """Sum all MoT router aux losses in the model.
 
     Scans both C2fMoT wrappers and standalone MoTBlock instances.
-    Uses id-based deduplication so blocks nested inside C2fMoT are not
-    double-counted.
+    Uses a unified ``set[int]`` deduplication mechanism so blocks nested
+    inside C2fMoT are not double-counted, regardless of traversal order.
 
     Call in the training loss function:
         loss = det_loss + collect_mot_aux_loss(model)
     """
     total = None
-    covered: set[int] = set()
+    seen: set[int] = set()
     for m in model.modules():
-        if isinstance(m, C2fMoT):
-            l = m.last_aux_loss
-            if isinstance(l, torch.Tensor) and l.requires_grad:
-                total = l if total is None else total + l
-            covered.update(id(child) for child in m.modules())
-        elif isinstance(m, MoTBlock) and id(m) not in covered:
+        if isinstance(m, (C2fMoT, MoTBlock)):
+            if id(m) in seen:
+                continue
             l = getattr(m, 'last_aux_loss', None)
             if isinstance(l, torch.Tensor) and l.requires_grad:
                 total = l if total is None else total + l
+            # Mark this module and all its children as seen
+            seen.update(id(child) for child in m.modules())
     return total if total is not None else torch.zeros(1, device=_aux_loss_device(model))
 
 
@@ -988,4 +1097,6 @@ def anneal_mot_temperature(model: nn.Module, factor: float = 0.97,
     """Multiplicatively anneal MoT router temperatures each epoch."""
     for m in model.modules():
         if isinstance(m, _MoTRouter):
-            m.temperature = max(m.temperature * factor, min_temp)
+            # temperature is now a persistent buffer tensor
+            new_temp = max(float(m.temperature) * factor, min_temp)
+            m.temperature.fill_(new_temp)

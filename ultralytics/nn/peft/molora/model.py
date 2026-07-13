@@ -4,6 +4,7 @@ Provides:
   - get_peft_molora_model(model, config): wrap an Ultralytics model with MoLoRA
   - MoLoRAModel: convenience wrapper with aux_loss, merge/unmerge, checkpointing
 """
+from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -276,29 +277,100 @@ class MoLoRAModel(nn.Module):
         LOGGER.info(f"[MoLoRA] Expert replay buffer loaded for domain '{buffer.get('domain')}'")
 
     def save_checkpoint(self, path: str) -> None:
-        """Save only MoLoRA parameters + config.
-
-        Includes registered buffers (e.g. ``_step_count``, ``_usage_ema``)
-        alongside trainable parameters, since these carry training state
-        needed for correct resume.
-        """
-        molora_keys = ("lora_A", "lora_B", "router", "molora",
-                       "_step_count", "_usage_ema", "_domain_active_mask")
+        """Save a versioned MoLoRA-only checkpoint with explicit compatibility metadata."""
+        state_dict = self.model.state_dict()
+        adapter_state = {k: v for k, v in state_dict.items() if _is_molora_state_key(k)}
+        config = asdict(self.config) if is_dataclass(self.config) else dict(self.config)
         state = {
-            "config": self.config.__dict__ if hasattr(self.config, "__dict__") else self.config,
-            "state_dict": {
-                k: v for k, v in self.model.state_dict().items()
-                if any(p in k for p in molora_keys)
-            },
+            "schema_version": 1,
+            "format": "molora_adapter",
+            "config": config,
+            "structure": _molora_structure(self.model),
+            "state_dict": adapter_state,
         }
         torch.save(state, path)
         LOGGER.info(f"[MoLoRA] Checkpoint saved to {path}")
 
     def load_checkpoint(self, path: str) -> None:
-        """Load MoLoRA parameters from a checkpoint."""
+        """Load a checkpoint, rejecting incompatible configuration or partial state."""
         state = torch.load(path, map_location="cpu")
-        loaded = self.model.load_state_dict(state["state_dict"], strict=False)
-        LOGGER.info(f"[MoLoRA] Checkpoint loaded from {path} (missing={len(loaded.missing_keys)}, unexpected={len(loaded.unexpected_keys)})")
+        if not isinstance(state, dict) or "state_dict" not in state:
+            raise ValueError(
+                "Invalid MoLoRA checkpoint: expected a dict with 'state_dict'. "
+                "Legacy/unversioned checkpoints must be re-exported with save_checkpoint()."
+            )
+        if state.get("schema_version") != 1 or state.get("format") != "molora_adapter":
+            raise ValueError(
+                f"Unsupported MoLoRA checkpoint schema: version={state.get('schema_version')!r}, "
+                f"format={state.get('format')!r}; expected version=1, format='molora_adapter'."
+            )
+        saved_config = state.get("config")
+        if not isinstance(saved_config, dict):
+            raise ValueError("Invalid MoLoRA checkpoint: missing complete 'config' dictionary.")
+        current_config = asdict(self.config) if is_dataclass(self.config) else dict(self.config)
+        for key in ("r", "num_experts", "top_k", "router_type", "target_modules"):
+            saved_value = saved_config.get(key)
+            current_value = current_config.get(key)
+            if key == "target_modules":
+                saved_value = sorted(saved_value or [])
+                current_value = sorted(current_value or [])
+            if saved_value != current_value:
+                raise ValueError(
+                    f"MoLoRA checkpoint config mismatch for {key}: "
+                    f"checkpoint={saved_value!r}, model={current_value!r}."
+                )
+        saved_structure = state.get("structure")
+        current_structure = _molora_structure(self.model)
+        if saved_structure != current_structure:
+            raise ValueError(
+                "MoLoRA checkpoint structure mismatch (target names, layer types, or dimensions differ)."
+            )
+        checkpoint_sd = state["state_dict"]
+        if not isinstance(checkpoint_sd, dict):
+            raise ValueError("Invalid MoLoRA checkpoint: 'state_dict' must be a dictionary.")
+        expected_keys = {k for k in self.model.state_dict() if _is_molora_state_key(k)}
+        missing = sorted(expected_keys - set(checkpoint_sd))
+        unexpected = sorted(set(checkpoint_sd) - expected_keys)
+        if missing or unexpected:
+            raise RuntimeError(
+                "MoLoRA checkpoint state mismatch: "
+                f"missing={missing[:5]} ({len(missing)} total), "
+                f"unexpected={unexpected[:5]} ({len(unexpected)} total)."
+            )
+        try:
+            self.model.load_state_dict(checkpoint_sd, strict=False)
+        except RuntimeError as exc:
+            raise RuntimeError(f"MoLoRA checkpoint tensor shape mismatch: {exc}") from exc
+        LOGGER.info(f"[MoLoRA] Checkpoint loaded from {path}")
+
+
+def _is_molora_state_key(key: str) -> bool:
+    """Return whether a state key belongs to adapter parameters or state buffers."""
+    return any(token in key for token in (
+        "lora_A", "lora_B", "router", "loss_fn", "_step_count",
+        "_usage_ema", "_domain_active_mask",
+    ))
+
+
+def _molora_structure(model: nn.Module) -> List[Dict[str, Any]]:
+    """Describe wrapped layers sufficiently to reject incompatible adapters."""
+    structure = []
+    for name, layer in model.named_modules():
+        if not isinstance(layer, MoLoRALayer):
+            continue
+        base = layer.base_layer
+        item: Dict[str, Any] = {
+            "name": name,
+            "base_type": type(base).__name__,
+            "r": layer.r,
+            "num_experts": layer.num_experts,
+            "in_features": getattr(base, "in_features", getattr(base, "in_channels", None)),
+            "out_features": getattr(base, "out_features", getattr(base, "out_channels", None)),
+        }
+        if isinstance(base, nn.Conv2d):
+            item.update({"kernel_size": tuple(base.kernel_size), "groups": base.groups})
+        structure.append(item)
+    return structure
 
     def param_stats(self) -> Dict[str, Any]:
         return count_parameters(self.model)

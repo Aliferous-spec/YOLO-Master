@@ -474,8 +474,10 @@ def run_variant(
 
         # ── 4.2 应用 PEFT ──
         if variant.peft_type == "full":
-            # 全量微调：不做任何 PEFT 修改，所有参数默认可训练
-            pass
+            # 全量微调：不做任何 PEFT 修改，但需显式解冻
+            # （checkpoint 可能是在 PEFT/冻结状态下保存的）
+            for p in model.model.parameters():
+                p.requires_grad = True
         elif variant.peft_type == "peft":
             # 标准 PEFT (LoRA/DoRA/LoHa/IA3/HRA)：显式注入 adapter
             model = apply_standard_peft(model, variant.train_kwargs)

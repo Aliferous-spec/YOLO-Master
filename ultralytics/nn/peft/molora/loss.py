@@ -21,6 +21,11 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     if world <= 1:
         return tensor
     orig_dtype = tensor.dtype
+    # NCCL backend only supports CUDA tensors. If the tensor is on CPU but
+    # the process group is NCCL, move it to the current CUDA device to avoid
+    # "No backend type associated with device type cpu".
+    if tensor.device.type == "cpu" and dist.get_backend() == "nccl":
+        tensor = tensor.cuda()
     out = tensor.float().clone()
     dist.all_reduce(out, op=dist.ReduceOp.SUM)
     out = out / world

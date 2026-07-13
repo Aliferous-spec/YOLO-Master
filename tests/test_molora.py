@@ -467,9 +467,44 @@ class TestMoLoRAModelWrapper:
             path = f.name
         try:
             wrapper.save_checkpoint(path)
-            wrapper2 = MoLoRAModel(model, cfg)
+            wrapper2 = MoLoRAModel(self._make_model(), cfg)
             wrapper2.load_checkpoint(path)
             assert os.path.exists(path)
+        finally:
+            os.unlink(path)
+
+    def test_checkpoint_rejects_config_mismatch(self):
+        wrapper = MoLoRAModel(self._make_model(), MoLoRAConfig(
+            r=4, alpha=8, num_experts=4, top_k=2,
+            target_modules=["conv1", "conv2", "fc"]
+        ))
+        other = MoLoRAModel(self._make_model(), MoLoRAConfig(
+            r=2, alpha=4, num_experts=4, top_k=2,
+            target_modules=["conv1", "conv2", "fc"]
+        ))
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+            path = f.name
+        try:
+            wrapper.save_checkpoint(path)
+            with pytest.raises(ValueError, match="config mismatch.*r"):
+                other.load_checkpoint(path)
+        finally:
+            os.unlink(path)
+
+    def test_checkpoint_rejects_partial_state(self):
+        wrapper = MoLoRAModel(self._make_model(), MoLoRAConfig(
+            r=4, alpha=8, num_experts=4, top_k=2,
+            target_modules=["conv1", "conv2", "fc"]
+        ))
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
+            path = f.name
+        try:
+            wrapper.save_checkpoint(path)
+            state = torch.load(path, map_location="cpu")
+            state["state_dict"].pop(next(iter(state["state_dict"])))
+            torch.save(state, path)
+            with pytest.raises(RuntimeError, match="state mismatch"):
+                wrapper.load_checkpoint(path)
         finally:
             os.unlink(path)
 

@@ -37,6 +37,11 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     # across many ranks accumulates large rounding error that cannot be
     # recovered. Cast back to the original dtype after averaging.
     orig_dtype = tensor.dtype
+    # NCCL backend only supports CUDA tensors. If the tensor is on CPU but
+    # the process group is NCCL, move it to the current CUDA device to avoid
+    # "No backend type associated with device type cpu".
+    if tensor.device.type == "cpu" and dist.get_backend() == "nccl":
+        tensor = tensor.cuda()
     out = tensor.float().clone()  # gradient-preserving; float32 for stable reduce
     dist.all_reduce(out, op=dist.ReduceOp.SUM)
     out = out / world
@@ -197,6 +202,10 @@ class MoELoss(nn.Module):
             # not lose precision when summing large counts across ranks.
             counts32 = local_expert_counts.float()
             local_count = counts32.new_tensor(float(total))
+            # NCCL backend only supports CUDA tensors.
+            if counts32.device.type == "cpu" and dist.get_backend() == "nccl":
+                counts32 = counts32.cuda()
+                local_count = local_count.cuda()
             dist.all_reduce(counts32, op=dist.ReduceOp.SUM)
             dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
             return (counts32 / local_count.clamp_min(1.0)).to(local_expert_counts.dtype).detach()
@@ -215,6 +224,11 @@ class MoELoss(nn.Module):
         local_sum = tensor.float().sum(dim=0)
         # We need the global batch size count
         local_count = torch.tensor(tensor.size(0), device=tensor.device, dtype=torch.float32)
+
+        # NCCL backend only supports CUDA tensors.
+        if local_sum.device.type == "cpu" and dist.get_backend() == "nccl":
+            local_sum = local_sum.cuda()
+            local_count = local_count.cuda()
 
         dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(local_count, op=dist.ReduceOp.SUM)

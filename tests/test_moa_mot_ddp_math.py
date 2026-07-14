@@ -8,7 +8,7 @@ def test_moa_local_gradient_global_value_formula():
  def reduce(t,op=None):
   if t.numel()==2:t.add_(torch.tensor([.2,.8]))
   else:t.add_(1.)
- with patch('torch.distributed.is_initialized',return_value=True),patch('torch.distributed.get_world_size',return_value=2),patch('torch.distributed.all_reduce',side_effect=reduce):
+ with patch('torch.distributed.is_initialized',return_value=True),patch('torch.distributed.get_world_size',return_value=2),patch('torch.distributed.get_backend',return_value='gloo'),patch('torch.distributed.all_reduce',side_effect=reduce):
   loss=_moa_router_aux_loss(w,logits,1.);loss.backward()
  assert torch.isfinite(logits.grad).all() and logits.grad.abs().sum()>0
 def test_mot_only_reduces_detached_usage():

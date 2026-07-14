@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import gc
+import io
 import math
 import os
 import subprocess
@@ -244,6 +245,7 @@ class BaseTrainer:
             self.args.save_dir = str(self.save_dir)
             save_trainer_args_yaml(self.save_dir, self.args)
         self.last, self.best = self.wdir / "last.pt", self.wdir / "best.pt"  # checkpoint paths
+        self.healthy = self.wdir / "last_healthy.pt"  # finite state used only for automatic recovery
         self.save_period = self.args.save_period
 
         self.batch_size = self.args.batch
@@ -278,6 +280,7 @@ class BaseTrainer:
             self.csv.unlink()
         self.plot_idx = [0, 1, 2]
         self.nan_recovery_attempts = 0
+        self._gradient_nonfinite = False
 
         # Callbacks
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
@@ -1213,6 +1216,9 @@ class BaseTrainer:
                 continue
 
             self.nan_recovery_attempts = 0
+            if RANK in {-1, 0} and not (self.args.save or final_epoch):
+                # Keep recovery available even when normal checkpoint saving is disabled.
+                self.save_model(healthy_only=True)
             if RANK in {-1, 0}:
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
@@ -1312,58 +1318,76 @@ class BaseTrainer:
             if any(filter(lambda f: f in n, self.freeze_layer_names)) and isinstance(m, nn.BatchNorm2d):
                 m.eval()
 
-    def save_model(self):
-        """Save model training checkpoints with additional metadata."""
-        import io
+    @staticmethod
+    def _state_is_finite(value):
+        """Return whether every floating tensor nested in a checkpoint state is finite."""
+        if isinstance(value, torch.Tensor):
+            return not value.is_floating_point() and not value.is_complex() or bool(torch.isfinite(value).all().item())
+        if isinstance(value, nn.Module):
+            return all(BaseTrainer._state_is_finite(v) for v in value.state_dict().values())
+        if isinstance(value, dict):
+            return all(BaseTrainer._state_is_finite(v) for v in value.values())
+        if isinstance(value, (list, tuple)):
+            return all(BaseTrainer._state_is_finite(v) for v in value)
+        return True
 
-        # Serialize ckpt to a byte buffer once (faster than repeated torch.save() calls)
+    def _serialize_checkpoint(self):
+        """Serialize the complete resume state once for normal and recovery checkpoints."""
         buffer = io.BytesIO()
         torch.save(
             {
                 "epoch": self.epoch,
                 "best_fitness": self.best_fitness,
-                "model": None,  # resume and final checkpoints derive from EMA
+                "model": None,
                 "ema": deepcopy(unwrap_model(self.ema.ema)).half(),
                 "updates": self.ema.updates,
                 "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
                 "scaler": self.scaler.state_dict(),
-                "train_args": vars(self.args),  # save as dict
+                "train_args": vars(self.args),
                 "train_metrics": {**self.metrics, **{"fitness": self.fitness}},
                 "train_results": self.read_results_csv(),
                 "date": datetime.now().isoformat(),
                 "version": __version__,
-                "git": {
-                    "root": str(GIT.root),
-                    "branch": GIT.branch,
-                    "commit": GIT.commit,
-                    "origin": GIT.origin,
-                },
+                "git": {"root": str(GIT.root), "branch": GIT.branch, "commit": GIT.commit, "origin": GIT.origin},
                 "license": "AGPL-3.0 (https://ultralytics.com/license)",
                 "docs": "https://docs.ultralytics.com",
             },
             buffer,
         )
-        serialized_ckpt = buffer.getvalue()  # get the serialized content to save
+        return buffer.getvalue()
 
-        # Save checkpoints
-        self.wdir.mkdir(parents=True, exist_ok=True)  # ensure weights directory exists
-        self.last.write_bytes(serialized_ckpt)  # save last.pt
+    def _save_healthy_checkpoint(self, serialized_ckpt):
+        """Atomically replace the recovery checkpoint only with a finite complete state."""
+        checkpoint = torch.load(io.BytesIO(serialized_ckpt), map_location="cpu", weights_only=False)
+        if not self._state_is_finite(checkpoint):
+            LOGGER.warning("Skipping nonfinite recovery checkpoint state.")
+            return False
+        tmp = self.healthy.with_suffix(".tmp")
+        tmp.write_bytes(serialized_ckpt)
+        tmp.replace(self.healthy)
+        return True
+
+    def save_model(self, healthy_only=False):
+        """Save a normal checkpoint and atomically refresh the finite recovery checkpoint."""
+        serialized_ckpt = self._serialize_checkpoint()
+        self.wdir.mkdir(parents=True, exist_ok=True)
+        self._save_healthy_checkpoint(serialized_ckpt)
+        if healthy_only:
+            return
+        self.last.write_bytes(serialized_ckpt)
         if self.best_fitness == self.fitness:
-            self.best.write_bytes(serialized_ckpt)  # save best.pt
-        
-        # Save LoRA adapters if enabled
-        lora_model = unwrap_model(self.model)
-        if getattr(lora_model, "lora_enabled", False) and getattr(self.args, 'lora_save_adapters', True):
-            adapter_dir = self.wdir / (getattr(self.args, 'lora_adapter_dir', 'lora_adapter') + f"_epoch{self.epoch}")
-            if self.best_fitness == self.fitness:
-                best_adapter_dir = self.wdir / (getattr(self.args, 'lora_adapter_dir', 'lora_adapter') + "_best")
-                save_lora_adapters(lora_model, best_adapter_dir)
-            
-            if (self.save_period > 0) and (self.epoch % self.save_period == 0):
-                save_lora_adapters(lora_model, adapter_dir)
+            self.best.write_bytes(serialized_ckpt)
 
-        if (self.save_period > 0) and (self.epoch % self.save_period == 0):
-            (self.wdir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
+        lora_model = unwrap_model(self.model)
+        if getattr(lora_model, "lora_enabled", False) and getattr(self.args, "lora_save_adapters", True):
+            adapter_dir = self.wdir / (getattr(self.args, "lora_adapter_dir", "lora_adapter") + f"_epoch{self.epoch}")
+            if self.best_fitness == self.fitness:
+                best_adapter_dir = self.wdir / (getattr(self.args, "lora_adapter_dir", "lora_adapter") + "_best")
+                save_lora_adapters(lora_model, best_adapter_dir)
+            if self.save_period > 0 and self.epoch % self.save_period == 0:
+                save_lora_adapters(lora_model, adapter_dir)
+        if self.save_period > 0 and self.epoch % self.save_period == 0:
+            (self.wdir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)
 
     def get_dataset(self):
         """Get train and validation datasets from data dictionary.
@@ -1422,6 +1446,13 @@ class BaseTrainer:
     def optimizer_step(self):
         """Perform a single step of the training optimizer with gradient clipping and EMA update."""
         self.scaler.unscale_(self.optimizer)  # unscale gradients
+        self._gradient_nonfinite = getattr(self, "_gradient_nonfinite", False) or any(
+            p.grad is not None and not bool(torch.isfinite(p.grad).all().item()) for p in self.model.parameters()
+        )
+        if self._gradient_nonfinite:
+            self.optimizer.zero_grad()
+            self.scaler.update()
+            return
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -1847,11 +1878,14 @@ class BaseTrainer:
                 persistent = name not in module._non_persistent_buffers_set
                 if backend == "nccl" and buffer.device.type != "cuda":
                     if persistent:
-                        # Move diagnostic buffers (e.g. _mixture_loss_ema_buf) to the
-                        # EMA model's device so NCCL broadcast can proceed.  These are
-                        # small float tensors lazily registered before model.to(device).
+                        # Move persistent diagnostic buffers (e.g. _mixture_loss_ema_buf)
+                        # to the EMA model's CUDA device so NCCL broadcast can proceed.
+                        # Directly replace the registered buffer to ensure the module
+                        # sees the new device placement.
                         try:
-                            buffer.data = buffer.to(self.device)
+                            cuda_buf = buffer.to(self.device, non_blocking=True)
+                            module._buffers[name] = cuda_buf
+                            buffer = cuda_buf  # update local reference for broadcast
                         except RuntimeError:
                             skipped.append(full_name)
                             continue
@@ -2044,39 +2078,53 @@ class BaseTrainer:
         self.best_fitness = ckpt.get("best_fitness", 0.0)
 
     def _handle_nan_recovery(self, epoch):
-        """Detect and recover from NaN/Inf loss and fitness collapse by loading last checkpoint."""
-        loss_nan = self.loss is not None and not bool(torch.isfinite(self.loss.detach()).all().item())
-        fitness_nan = self.fitness is not None and not np.isfinite(self.fitness)
-        fitness_collapse = bool(self.best_fitness and self.best_fitness > 0 and self.fitness == 0)
-        local_corrupted = bool(loss_nan or fitness_nan or fitness_collapse)
-        reason = "Loss NaN/Inf" if loss_nan else "Fitness NaN/Inf" if fitness_nan else "Fitness collapse"
+        """Recover only from globally confirmed nonfinite training state, never from zero fitness."""
+        loss_nonfinite = self.loss is not None and not bool(torch.isfinite(self.loss.detach()).all().item())
+        fitness_nonfinite = self.fitness is not None and not bool(np.isfinite(self.fitness))
+        gradient_nonfinite = bool(getattr(self, "_gradient_nonfinite", False))
+        local_flags = torch.tensor(
+            [int(loss_nonfinite), int(fitness_nonfinite), int(gradient_nonfinite)], dtype=torch.int32,
+            device=self.device if RANK != -1 and dist.get_backend() == "nccl" else torch.device("cpu"),
+        )
         if RANK != -1:
-            # NCCL requires CUDA collective tensors; gloo accepts CPU.
-            flag_device = self.device if dist.get_backend() == "nccl" else torch.device("cpu")
-            corrupted_flag = torch.tensor(int(local_corrupted), dtype=torch.int32, device=flag_device)
-            dist.all_reduce(corrupted_flag, op=dist.ReduceOp.MAX)
-            corrupted = bool(corrupted_flag.item())
-        else:
-            corrupted = local_corrupted
-        if not corrupted:
+            dist.all_reduce(local_flags, op=dist.ReduceOp.MAX)
+        flags = [bool(x) for x in local_flags.cpu().tolist()]
+        if not any(flags):
             return False
-        if epoch == self.start_epoch or not self.last.exists():
+        reason = ", ".join(name for name, active in zip(("Loss NaN/Inf", "Fitness NaN/Inf", "Gradient NaN/Inf"), flags) if active)
+
+        healthy = getattr(self, "healthy", None)
+        if healthy is None:
+            healthy = getattr(self, "last", None)
+        payload = None
+        if RANK in {-1, 0} and healthy.exists():
+            try:
+                candidate = torch.load(healthy, map_location="cpu", weights_only=False)
+                if self._state_is_finite(candidate):
+                    payload = healthy.read_bytes()
+            except (OSError, RuntimeError, ValueError, EOFError) as exc:
+                LOGGER.warning(f"Recovery checkpoint {healthy} is unreadable: {exc}")
+        if RANK != -1:
+            decision = [payload]
+            dist.broadcast_object_list(decision, src=0)
+            payload = decision[0]
+        if payload is None:
             raise RuntimeError(f"Global nonfinite training state detected ({reason}) without a healthy recovery checkpoint.")
+
         self.nan_recovery_attempts += 1
         if self.nan_recovery_attempts > 3:
             raise RuntimeError(f"Training failed: NaN persisted for {self.nan_recovery_attempts} epochs")
-        LOGGER.warning(f"{reason} detected (attempt {self.nan_recovery_attempts}/3), recovering from last.pt...")
-        self._model_train()  # set model to train mode before loading checkpoint to avoid inference tensor errors
-        _, ckpt = load_checkpoint(self.last)
+        LOGGER.warning(f"{reason} detected (attempt {self.nan_recovery_attempts}/3), recovering from {healthy.name}...")
+        self._model_train()
+        ckpt = torch.load(io.BytesIO(payload), map_location="cpu", weights_only=False)
         ema_state = ckpt["ema"].float().state_dict()
-        if not all(torch.isfinite(v).all() for v in ema_state.values() if isinstance(v, torch.Tensor)):
-            raise RuntimeError(f"Checkpoint {self.last} is corrupted with NaN/Inf weights")
         target = unwrap_model(self.model)
         if getattr(target, "lora_enabled", False):
             load_lora_compatible_state_dict(target, ema_state, context="NaN recovery checkpoint EMA")
         else:
-            target.load_state_dict(ema_state)  # Load EMA weights into model
-        self._load_checkpoint_state(ckpt)  # Load optimizer/scaler/EMA/best_fitness
+            target.load_state_dict(ema_state)
+        self._load_checkpoint_state(ckpt)
+        self._gradient_nonfinite = False
         del ckpt, ema_state
         self.scheduler.last_epoch = epoch - 1
         return True

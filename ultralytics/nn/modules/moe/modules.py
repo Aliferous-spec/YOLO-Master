@@ -428,8 +428,13 @@ class ES_MOE(nn.Module):
         )
 
         # Load-balancing loss (original design)
-        self.register_buffer('load_balancing_loss', torch.tensor(0.0), persistent=False)
-        self.register_buffer('expert_usage_counts', torch.zeros(num_experts), persistent=False)
+        # NOTE: these are NOT registered as nn.Module buffers to avoid DDP
+        # _sync_buffers broadcasting them across ranks (they are pure statistics
+        # and do not need gradient synchronisation).  Keeping them as plain
+        # attributes prevents "No backend type associated with device type cpu"
+        # when a buffer lands on CPU before the model is moved to CUDA.
+        self.load_balancing_loss = torch.tensor(0.0)
+        self.expert_usage_counts = torch.zeros(num_experts)
         self.last_routing_snapshot = {}
         # Expose balance_loss_coeff for GiniBalanceScheduler / apply_balance_loss_coeff
         self.balance_loss_coeff = 1.0

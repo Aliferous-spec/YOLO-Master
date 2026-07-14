@@ -1,9 +1,9 @@
 # Reproduction Methodology for Training the Baseline YOLO-Master-v0.1-N & YOLO-Master-EsMoE-N on VisDrone, SKU-110K, and AI-TOD-v2
  
 
-Reproducible training strategy for the two YOLO-Master nano variants on two dense-scene vertical scenes, with per-epoch logging of the required metrics (mAP50, mAP50-95, box_loss, cls_loss, moe_loss)
+Reproducible training strategy for the two YOLO-Master nano variants on three vertical scenes, with per-epoch logging of the required metrics (mAP50, mAP50-95, box_loss, cls_loss, moe_loss)
 
-📊 **Live training curves for all six runs (Weights & Biases):** https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce
+📊 **Live training curves for all eight runs (Weights & Biases):** https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce
 
 | Model | Config | # Params | MoE characteristics |
 | --- | --- | --- | --- |
@@ -77,7 +77,7 @@ python -c "from ultralytics.data.utils import check_det_dataset; check_det_datas
 
 Since this dataset is constructed upon the [xVIEW](https://xviewdataset.org) dataset, please refer to the offical [AI-TOD repo](https://github.com/jwwangchn/AI-TOD) for raw image downloads and generation scripts. 
 
-The dataset will be stored under the default Ultralytics `datasets_dir` , usually under `../datasets` . VisDrone is ~2.3GB, SKU-110K ~13.6GB and AI-TOD-v2 is ~27GB
+The dataset should be stored under the default Ultralytics `datasets_dir` , usually under `../datasets`. VisDrone is ~2.3GB, SKU-110K ~13.6GB and AI-TOD-v2 is ~27GB
 
 ## 3. Training
 
@@ -124,10 +124,7 @@ A training of 100 epochs can already achieve a high mAP. **Only train for 300 or
 
 ### Expected results
 
-`v0.1-N` trains and validates cleanly on both datasets. `EsMoE-N` **also trains
-correctly** (its train losses track `v0.1-N`), ***but with the default sparse
-evaluation its validation mAP collapses***; `--no-sparse-eval` restores it to the
-`v0.1-N` level **(see Known issue 1 for the mechanism)**
+`v0.1-N` trains and validates cleanly all three datasets. `EsMoE-N` **trains correctly** on VisDrone & SKU-110k (its train losses track `v0.1-N`), ***but with the default sparse evaluation its validation mAP collapses***; `--no-sparse-eval` restores it to the `v0.1-N` level **(see Known issue 1 for the mechanism)** on VisDrone & SKU-110k. Moreover, `EsMoE-N`'s routering mechanism **completely collapsed** on AI-TOD-v2 even with `--no-sparse-eval` due to the scale and high complexity of the dataset **(see Known issue 4)**. 
 
 | Model | Dataset | Eval Method | mAP50 | mAP50-95 | W&B Run | Raw Results |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -137,10 +134,10 @@ evaluation its validation mAP collapses***; `--no-sparse-eval` restores it to th
 | v0.1-N | SKU-110K | default | 0.906 | 0.582 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/rogiamt4) | [Download](https://github.com/skywalker-lt/YOLO-Master/releases/download/v0.1.0/result-v0.1n-sku110k.zip) |
 | EsMoE-N | SKU-110K | default (sparse) | 0.305 | 0.136 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/7nofdfnb) | [Download](https://github.com/skywalker-lt/YOLO-Master/releases/download/v0.1.0/result-esmoen-sparse-sku110k.zip) |
 | EsMoE-N | SKU-110K | `--no-sparse-eval` | 0.904 | 0.583 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/yiz22jp3) | [Download](https://github.com/skywalker-lt/YOLO-Master/releases/download/v0.1.0/result-esmoen-sku110k.zip) |
-| v0.1-N | AI-TOD-v2 | default | 0.282 | 0.120 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/rogiamt4) | N/A |
-| EsMoE-N | AI-TOD-v2 | default | ≈0 (collapsed) | ≈0 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/x8447xku) | N/A | 
+| v0.1-N | AI-TOD-v2 | default | 0.282 | 0.120 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/x8447xku) | N/A |
+| EsMoE-N | AI-TOD-v2 | `--no-sparse-eval` | ≈0 (collapsed) | ≈0 | [View](https://wandb.ai/yolo-master-reproduce/yolo-master-reproduce/runs/x8447xku) | N/A | 
 
-*The raw results of the AI-TOD-v2 trainings are unavailable. Please check the W&B runs instead.
+*The raw results of the AI-TOD-v2 training runs are unavailable. Please check the W&B runs instead.
 
 ### Visualization
 
@@ -150,17 +147,17 @@ evaluation its validation mAP collapses***; `--no-sparse-eval` restores it to th
 | **EsMoE-N (sparse eval)** | <img width="2234" height="882" alt="esmoe-sparse-visdrone" src="https://github.com/user-attachments/assets/e9a0dd9d-e760-4b41-8b06-c076f9793ad9" /> | <img width="2234" height="882" alt="esmoe-sparse-sku110k" src="https://github.com/user-attachments/assets/9fbf7230-fa11-4f55-9609-644a7b973762" /> | N/A (experiment not conducted) |
 | **EsMoE-N (`--no-sparse-eval`)** | <img width="2234" height="882" alt="esmoe-visdrone" src="https://github.com/user-attachments/assets/1258edb0-bc03-4f50-84d3-b86507d663f6" /> | <img width="2234" height="882" alt="esmoe-sku110k" src="https://github.com/user-attachments/assets/cc50bd4c-1079-4abd-8b4d-9408d10d01a9" /> | <img width="2234" height="882" alt="esmoe-aitodv2" src="https://github.com/user-attachments/assets/8b9bb8d4-f32b-46d3-9176-0a9364889d8e" /> |
 
-***Expected qualitative trend: `--no-sparse-eval` lifts `EsMoE-N` from collapsed (VisDrone) / far-below-baseline (SKU-110K) up to outperform the `v0.1-N` mAP, only with ~1/3 of its parameters.***
+***Expected qualitative trend: `--no-sparse-eval` lifts `EsMoE-N` from collapsed (VisDrone) / far-below-baseline (SKU-110K) up to outperform the `v0.1-N` mAP, only with ~1/3 of its parameters. However, it may not help on AI-TOD-v2 since the rounting mechanism itself is incapable of handling it.***
 
-## 4. Known issues + solutions/takeways ‼️Very important‼️
+## 4. Known issues + solutions/takeaways ‼️Very important‼️
 
-### 1. **`EsMoE-N` validation mAP collapses (ES_MOE sparse inference)**
+### 1. **`EsMoE-N` validation mAP collapses on VisDrone & SKU-110k (ES_MOE sparse inference)**
 
 **Symptom.** `EsMoE-N` train losses (`box/cls/dfl`) descend normally — identical to `v0.1-N` — yet its **validation** mAP is near zero (VisDrone only ~0.01) or far below the `v0.1-N` (SKU-110K 0.31 vs 0.91). On VisDrone the mAP peaks mid-training then decays toward zero. 
 
-**Why it happens? The machemism:**
+**Why it happens? The machanism:**
 
-the function `ES_MOE.forward` in `ultralytics/nn/modules/moe/modules.py`) uses two different code paths: 
+the function `ES_MOE.forward` in `ultralytics/nn/modules/moe/modules.py` uses two different code paths: 
 
 - **Training** → `_dense_forward`: it computes **all** experts and sums them weighted by the softmax routing weights, which sum to 1 → output at the correct magnitude.
 - **Inference** → `_sparse_forward` (taken because `use_sparse_inference=True` by default). For these configs (`top_k=None`, i.e. dense softmax over all experts), it:
@@ -174,7 +171,7 @@ So at inference the block emits roughly **one** expert at **~1/N** the activatio
 - sparse (default) → mAP50 0.06
 - forced dense → mAP50 0.35 (≈ the `v0.1-N` result)
 
-The weights are fine; but the inference path is wrongly is configured.
+The weights are fine; but the inference path is wrongly configured.
 
 **Solution.** `--no-sparse-eval` registers a callback that sets `ES_MOE.use_sparse_inference=False` on both the live model and its EMA at `on_pretrain_routine_end` / `on_train_start`, before any validation and before the EMA-derived checkpoints are written. Per-epoch validation, the saved `.pt`, and the final evaluation then all use the dense forward that matches training.
 
@@ -186,7 +183,7 @@ This is fixed at run time (a script flag), not in the library — `ES_MOE`'s def
 
 ### 2. SKU-110K extraction error (`tar ... Operation not permitted`)
 
-**Mechanism.** The dataset downloader extracts the SKU-110K archive with `tar xfz`, which tries to restore the files' archived ownership (`uid` / `gid`). On filesystems that disallow `chown` — for example, many networked, rootless, or container mounts — `tar` prints:
+**The mechanism.** The dataset downloader extracts the SKU-110K archive with `tar xfz`, which tries to restore the files' archived ownership (`uid` / `gid`). On filesystems that disallow `chown` — for example, many networked, rootless, or container mounts — `tar` prints:
 
 ```bash
 Cannot change ownership ... Operation not permitted

@@ -1,6 +1,6 @@
 # Baseline Training for Vertical Datasets (Issue #49)
 
-Reproducible training workflow for [Tencent/YOLO-Master issue #49](https://github.com/Tencent/YOLO-Master/issues/49), focused on the dense-scene vertical datasets `VisDrone` and `SKU-110K`, with per-epoch logging of the required metrics (`mAP50`, `mAP50-95`, `box_loss`, `cls_loss`, `moe_loss`).
+Reproducible training workflow for [Tencent/YOLO-Master issue #49](https://github.com/Tencent/YOLO-Master/issues/49), focused on the dense-scene vertical datasets `VisDrone` and `GlobalWheat2020`, with per-epoch logging of the required metrics (`mAP50`, `mAP50-95`, `box_loss`, `cls_loss`, `moe_loss`).
 
 Files in this directory:
 
@@ -58,24 +58,10 @@ python scripts/issue49/yolo_master_issue_49.py --list-datasets
 python scripts/issue49/yolo_master_issue_49.py --list-models
 ```
 
-Download and prepare `VisDrone` only:
-
-```bash
-python -c "from ultralytics.data.utils import check_det_dataset; check_det_dataset('ultralytics/cfg/datasets/VisDrone.yaml', autodownload=True)"
-```
-
-Download and prepare `SKU-110K` only:
-
-```bash
-python -c "from ultralytics.data.utils import check_det_dataset; check_det_dataset('ultralytics/cfg/datasets/SKU-110K.yaml', autodownload=True)"
-```
-
 Notes:
 
-- `VisDrone` is prepared under `datasets/VisDrone/` by default.
-- `SKU-110K` is prepared under `datasets/SKU-110K/` by default.
-- `VisDrone` requires about `2.3 GB` of disk space.
-- `SKU-110K` requires about `13.6 GB` of disk space.
+- `VisDrone` and `GlobalWheat2020` are prepared under `datasets/` by default.
+- `VisDrone` requires about `2.3 GB` of disk space, and `GlobalWheat2020` requires about `7.0 GB` of disk space.
 
 
 ## Training Commands
@@ -86,16 +72,19 @@ Base training command:
 python scripts/issue49/yolo_master_issue_49.py --dataset VisDrone --model YOLO-Master-v0.1-N
 ```
 
+This script keeps LoRA and MoLoRA disabled by default so issue49 runs stay baseline-only. If you explicitly want to test the repo-wide LoRA defaults, add `--enable-lora`.
+
 Common optional arguments:
 
 | Flag | Default | Explanation |
 | --- | --- | --- |
-| `--dataset {VisDrone,SKU-110K}` | `VisDrone` | Select a built-in dataset. |
+| `--dataset {VisDrone,SKU-110K,GlobalWheat2020}` | `VisDrone` | Select a built-in dataset. |
 | `--dataset path/to/data.yaml --dataset-name MyDataset` | off | Use a custom dataset YAML. |
 | `--model {YOLO-Master-v0.1-N,YOLO-Master-EsMoE-N}` | `YOLO-Master-v0.1-N` | Select a built-in model. |
 | `--model path/to/model.yaml --model-name MyModel` | off | Use a custom model YAML. |
 | `--uses-esmoe` | off | Enable ES-MoE-specific handling for a custom ES-MoE model. |
 | `--dense-eval-for-esmoe` | off | Enable dense evaluation during validation for ES-MoE models. |
+| `--enable-lora` | off | Opt into the repo-wide LoRA defaults. Default behavior keeps baseline training free of LoRA/MoLoRA. |
 | `--epochs / --imgsz / --batch` | `100 / 640 / 16` | Training epochs, input image size, and batch size. |
 | `--device / --workers` | `0 if CUDA else cpu / 4` | Device and DataLoader worker count. On Windows, `0` or `2` is often a good starting point. |
 | `--run-tag <tag>` | auto | Custom run tag; defaults to auto-generated names such as `run001`, `run002`, and so on. |
@@ -106,9 +95,41 @@ Common optional arguments:
 
 ## Expected Results
 
-W&B online：[https://wandb.ai/zheliang-/yolo_master_issue49](https://wandb.ai/zheliang-/yolo_master_issue49)
+W&B report：[Issue_49 VisDrone_and_GlobalWheat2020](https://api.wandb.ai/links/zheliang-/ljtd5vog)
 
-| Dataset | Model | Key Hparams | 	mAP50 | mAP50-95 | W&B | Runtime |
-| --- | --- | --- | --- | --- | --- |---------|
+| Dataset | Model | Key Hparams                         | 	mAP50 | mAP50-95 | Runtime |
+| --- | --- |-------------------------------------| --- | --- |---------|
+| `VisDrone` | `YOLO-Master-v0.1-N` | `Default`                           | `0.30571` | `0.17569` | `8h 46m 33s` |
+| `VisDrone` | `YOLO-Master-EsMoE-N` | `Default` | `0.09246` | `0.03875` | `7h 54m 0s` |
+| `VisDrone` | `YOLO-Master-EsMoE-N` | `dense eval`  | `0.32282` | `0.18649` | `7h 49m 9s` |
+| `GlobalWheat2020` | `YOLO-Master-v0.1-N` | `Default`              | `0.96843` | `0.63372` | `2h 49m 49s` |
+| `GlobalWheat2020` | `YOLO-Master-EsMoE-N` | `Default` | `0.82249` | `0.44471` | `2h 15m 2s` |
+| `GlobalWheat2020` | `YOLO-Master-EsMoE-N` | `dense eval`  | `0.96473` | `0.62405` | `2h 15m 56s` |
+
+## Known Issues
+
+### 1. Unexpected LoRA gets enabled in baseline runs
+
+**Symptom.** A baseline issue49 run unexpectedly enables LoRA and may later hit instability patterns such as `NaN` losses or `Fitness collapse detected`.
+
+**Cause.** Before commit `2eb330e`, the repository-wide defaults did not enable LoRA. Since commit `2eb330e`, `ultralytics/cfg/default.yaml` sets `lora_r: 16`, so baseline runs can silently enable LoRA.
+
+**Resolution.** This issue49 script now disables LoRA and MoLoRA by default. Keep using the default command line for baseline runs, and only pass `--enable-lora` when you intentionally want a LoRA experiment.
+
+### 2. `GlobalWheat2020 + YOLO-Master-EsMoE-N` may fail in late training with NaN/Inf checkpoints
+
+**Symptom.** `GlobalWheat2020 + YOLO-Master-EsMoE-N` may run normally for many epochs and then fail with `Loss NaN/Inf detected`, `Fitness collapse detected`, or `Checkpoint ... last.pt is corrupted with NaN/Inf weights`.
+
+**Cause.** This is a training-stability issue under the current repository defaults. In the observed failures, `NaN/Inf` values entered checkpoint EMA weights through corrupted BatchNorm running statistics inside `ES_MOE`, so the trainer could no longer recover from `last.pt`.
+
+**Resolution.** Try a smaller base learning rate with `--lr0`, such as `0.001`. If instability persists, make `amp` off.
+
+### 3. `YOLO-Master-EsMoE-N` default eval can underperform sharply on `VisDrone`
+
+**Symptom.** `YOLO-Master-EsMoE-N` can show a large gap between default eval and `dense eval`, especially on `VisDrone`. In the recorded runs, `VisDrone` `mAP50-95` changed from `0.03875` under the default setting to `0.18649` with `dense eval`, while `GlobalWheat2020` showed a smaller gap.
+
+**Cause.** `ES_MOE` trains with dense expert aggregation but validates with sparse inference by default. In the sparse path, routing weights are first averaged over space, then only Top-K experts are kept, and low-confidence experts can be pruned again by `dynamic_threshold`. This approximation removes location-specific expert specialization, which hurts dense, multi-scale, small-object scenes such as `VisDrone` much more than simpler single-class datasets such as `GlobalWheat2020`.
+
+**Resolution.** When comparing `YOLO-Master-EsMoE-N` against other models, treat default eval and `dense eval` as different settings rather than interchangeable measurements.
 
 

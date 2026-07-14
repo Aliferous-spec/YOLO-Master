@@ -85,12 +85,14 @@ class TrainConfig:
     patience: int = 100
     amp: bool = True
     dense_eval_for_esmoe: bool = False
+    lr0: float | None = None
     use_wandb: bool = True
     wandb_project: str = "yolo_master_issue49"
     wandb_entity: str | None = None
     wandb_mode: str = "online"
     wandb_group: str = "visdrone"
     run_tag: str = ""
+    enable_lora: bool = False
 
     def wandb_enabled(self) -> bool:
         return self.use_wandb and self.wandb_mode != "disabled"
@@ -106,6 +108,11 @@ DATASET_SPECS = {
         name="SKU-110K",
         slug="sku_110k",
         yaml=ROOT / "ultralytics" / "cfg" / "datasets" / "SKU-110K.yaml",
+    ),
+    "GlobalWheat2020": DatasetSpec(
+        name="GlobalWheat2020",
+        slug="globalwheat2020",
+        yaml=ROOT / "ultralytics" / "cfg" / "datasets" / "GlobalWheat2020.yaml",
     ),
 }
 
@@ -145,6 +152,26 @@ SUMMARY_COLUMNS = [
     "best_pt",
     "last_pt",
 ]
+
+
+def build_train_overrides(cfg: TrainConfig) -> dict:
+    """Return runtime overrides that keep baseline training stable by default."""
+    overrides = {}
+
+    if cfg.enable_lora:
+        return {"lr0": cfg.lr0} if cfg.lr0 is not None else {}
+
+    # Issue49 reproduces the plain model baselines by default. The repo-wide
+    # default config currently enables LoRA, so pin PEFT features off unless the
+    # caller explicitly opts in.
+    overrides = {
+        "lora_r": 0,
+        "lora_save_adapters": False,
+        "molora_num_experts": 0,
+    }
+    if cfg.lr0 is not None:
+        overrides["lr0"] = cfg.lr0
+    return overrides
 
 
 def slugify(text: str) -> str:
@@ -492,6 +519,7 @@ def write_summary_csv(summary: dict, path: Path) -> None:
 def train_one(model_spec: ModelSpec, dataset_spec: DatasetSpec, cfg: TrainConfig) -> dict:
     """Train one selected model on one selected dataset."""
     ensure_dataset(dataset_spec)
+    train_overrides = build_train_overrides(cfg)
     model_slug = slugify(model_spec.name.replace(".", ""))
     project_dir = RUNS_DIR / dataset_spec.slug / model_slug
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -522,6 +550,8 @@ def train_one(model_spec: ModelSpec, dataset_spec: DatasetSpec, cfg: TrainConfig
                 "imgsz": cfg.imgsz,
                 "batch": cfg.batch,
                 "device": cfg.device,
+                "enable_lora": cfg.enable_lora,
+                "train_overrides": train_overrides,
             },
             indent=2,
         )
@@ -545,6 +575,7 @@ def train_one(model_spec: ModelSpec, dataset_spec: DatasetSpec, cfg: TrainConfig
         patience=cfg.patience,
         amp=cfg.amp,
         verbose=True,
+        **train_overrides,
     )
 
     run_dir = project_dir / run_name
@@ -589,6 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patience", type=int, default=100)
+    parser.add_argument("--lr0", type=float, help="Optional override for the initial learning rate.")
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision training.")
     parser.add_argument("--dense-eval-for-esmoe", action="store_true", help="Force dense inference during eval for ES-MoE runs.")
     parser.add_argument("--run-tag", default="", help="Explicit run tag. Default auto-assigns run001/run002/...")
@@ -597,6 +629,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     parser.add_argument("--wandb-group", default="visdrone")
     parser.add_argument("--no-wandb", action="store_true", help="Disable custom W&B logging.")
+    parser.add_argument(
+        "--enable-lora",
+        action="store_true",
+        help="Opt into the repo-wide LoRA defaults. Off by default so issue49 runs stay baseline-only.",
+    )
     parser.add_argument("--list-datasets", action="store_true", help="Print predefined dataset keys and exit.")
     parser.add_argument("--list-models", action="store_true", help="Print predefined model keys and exit.")
     return parser
@@ -632,6 +669,7 @@ def main() -> int:
         workers=args.workers,
         seed=args.seed,
         patience=args.patience,
+        lr0=args.lr0,
         amp=not args.no_amp,
         dense_eval_for_esmoe=args.dense_eval_for_esmoe,
         use_wandb=not args.no_wandb,
@@ -640,6 +678,7 @@ def main() -> int:
         wandb_mode=args.wandb_mode,
         wandb_group=args.wandb_group,
         run_tag=args.run_tag,
+        enable_lora=args.enable_lora,
     )
 
     print(f"repo root: {ROOT}")

@@ -412,9 +412,24 @@ class _MoARouter(nn.Module):
 
 
 def _moa_router_aux_loss(weights: torch.Tensor, logits: torch.Tensor, coeff: float) -> torch.Tensor:
-    """GShard-scale MoA router regularization with a small z/entropy stabilizer."""
+    """GShard-scale MoA regularization with exact DDP global-value/local-gradient semantics."""
+    from ultralytics.nn.modules.moe.loss import should_reduce_ddp
+
     num_groups = weights.shape[1]
-    importance = weights.float().mean(dim=(0, 2, 3))
+    local_sum = weights.float().sum(dim=(0, 2, 3))
+    local_count = weights.new_tensor(float(weights.shape[0] * weights.shape[2] * weights.shape[3])).float()
+    if should_reduce_ddp():
+        global_sum = local_sum.detach().clone()
+        global_count = local_count.detach().clone()
+        dist.all_reduce(global_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(global_count, op=dist.ReduceOp.SUM)
+        # DDP averages parameter gradients by world size. Scale the local Jacobian
+        # by R/N while exposing the exact detached global value S/N.
+        importance = global_sum / global_count.clamp_min(1.0)
+        local_grad = (local_sum - local_sum.detach()) * (dist.get_world_size() / global_count.clamp_min(1.0))
+        importance = importance + local_grad
+    else:
+        importance = local_sum / local_count.clamp_min(1.0)
     importance = importance / importance.sum().clamp_min(1e-6)
     balance_loss = num_groups * torch.sum(importance * importance)
     z_loss = torch.logsumexp(logits.float(), dim=1).pow(2).mean()

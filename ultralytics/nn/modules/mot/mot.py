@@ -94,6 +94,8 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     if world <= 1:
         return tensor
     orig_dtype = tensor.dtype
+    if tensor.device.type == "cpu" and dist.get_backend() == "nccl":
+        tensor = tensor.cuda()
     out = tensor.float().clone()
     dist.all_reduce(out, op=dist.ReduceOp.SUM)
     out = out / world
@@ -121,7 +123,8 @@ def differentiable_balance_loss(
     usage = expert_usage.reshape(-1).float().detach()
     usage = usage / usage.sum().clamp_min(1e-6)
     if reduce_ddp:
-        importance = all_reduce_mean(importance)
+        # Synchronize only detached usage. Local importance keeps its Jacobian;
+        # DDP gradient averaging then optimizes one shared global-usage target.
         usage = all_reduce_mean(usage)
 
     if target_usage is not None:
@@ -711,7 +714,8 @@ def _mot_router_aux_loss(
     probs = probs.reshape(-1, num_experts)
 
     usage = _MoTRouter.expert_usage_from_indices(indices, num_experts)
-    balance = differentiable_balance_loss(probs, usage, num_experts)
+    from ultralytics.nn.modules.moe.loss import should_reduce_ddp
+    balance = differentiable_balance_loss(probs, usage, num_experts, reduce_ddp=should_reduce_ddp())
     z_loss = _MoTRouter.z_loss_from_logits(logits)
 
     total = weights.new_zeros(())

@@ -80,3 +80,17 @@ jobs:
           assert 'master' in v, f'Version not independent: {v}'
           print(f'Version check: PASS ({v})')
           "
+
+  ddp-cpu-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and CPU torch
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Two-process MoA/MoT gloo smoke
+        run: python -m torch.distributed.run --standalone --nproc_per_node=2 tests/ddp_moa_mot_smoke.py

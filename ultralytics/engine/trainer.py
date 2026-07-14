@@ -337,9 +337,15 @@ class BaseTrainer:
             cmd, file = generate_ddp_command(self)
             try:
                 LOGGER.info(f"{colorstr('DDP:')} debug command {' '.join(cmd)}")
+                # Inherit stdout/stderr so torchrun's Root Cause and worker traceback remain visible.
                 subprocess.run(cmd, check=True)
-            except Exception as e:
-                raise e
+            except subprocess.CalledProcessError as e:
+                LOGGER.error(
+                    f"DDP worker process failed with exit code {e.returncode}. "
+                    "The real worker traceback is printed above under 'Root Cause'/'error_file'; "
+                    "do not diagnose from CalledProcessError alone."
+                )
+                raise
             finally:
                 ddp_cleanup(self, str(file))
 
@@ -699,6 +705,11 @@ class BaseTrainer:
             torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
         )
         if self.world_size > 1:
+            if any(isinstance(m, nn.modules.batchnorm._BatchNorm) for m in self.model.modules()) and RANK in {-1, 0}:
+                LOGGER.warning(
+                    "DDP uses broadcast_buffers=False: BatchNorm running statistics are rank-local. "
+                    "EMA/rank0 validation follows rank0 statistics; use an explicitly tested SyncBatchNorm setup if global BN is required."
+                )
             self.model = nn.parallel.DistributedDataParallel(
                 self.model,
                 device_ids=[LOCAL_RANK] if self.device.type == "cuda" else None,

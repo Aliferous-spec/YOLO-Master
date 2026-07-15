@@ -794,6 +794,7 @@ class BaseTrainer:
         
         self.resume_training(ckpt)
         self.scheduler.last_epoch = self.start_epoch - 1  # do not move
+        self._bootstrap_healthy_checkpoint()
         self.run_callbacks("on_pretrain_routine_end")
 
     def _detect_moa_mot_modules(self):
@@ -1376,6 +1377,30 @@ class BaseTrainer:
         tmp.write_bytes(serialized_ckpt)
         tmp.replace(self.healthy)
         return True
+
+    def _bootstrap_healthy_checkpoint(self):
+        """Create and globally acknowledge a finite pre-step recovery point."""
+        bootstrap_ok = True
+        if RANK in {-1, 0}:
+            try:
+                self.wdir.mkdir(parents=True, exist_ok=True)
+                bootstrap_ok = all(
+                    self._state_is_finite(state)
+                    for state in (unwrap_model(self.model), self.optimizer.state_dict(), self.scaler.state_dict())
+                ) and self._save_healthy_checkpoint(self._serialize_checkpoint())
+            except (OSError, RuntimeError, ValueError) as exc:
+                LOGGER.warning(f"Initial healthy checkpoint creation failed: {exc}")
+                bootstrap_ok = False
+        if RANK != -1:
+            status = torch.tensor(
+                int(bootstrap_ok),
+                dtype=torch.int32,
+                device=self.device if dist.get_backend() == "nccl" else torch.device("cpu"),
+            )
+            dist.broadcast(status, src=0)
+            bootstrap_ok = bool(status.item())
+        if not bootstrap_ok:
+            raise RuntimeError("Initial training state is nonfinite; refusing to start without a healthy recovery checkpoint.")
 
     def save_model(self, healthy_only=False):
         """Save a normal checkpoint and atomically refresh the finite recovery checkpoint."""

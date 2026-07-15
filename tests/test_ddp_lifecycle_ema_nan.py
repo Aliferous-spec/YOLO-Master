@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from ultralytics.engine.trainer import BaseTrainer
+from ultralytics.utils.torch_utils import ModelEMA
 
 
 class E(nn.Module):
@@ -101,3 +102,70 @@ def test_healthy_checkpoint_rejects_nonfinite_state_and_preserves_prior(tmp_path
     torch.save({"tensor": torch.tensor(float("nan"))}, buffer)
     assert t._save_healthy_checkpoint(buffer.getvalue()) is False
     assert t.healthy.read_bytes() == b"known-good"
+
+
+def bootstrap_trainer(tmp_path):
+    t = object.__new__(BaseTrainer)
+    t.model = nn.Linear(1, 1)
+    t.ema = ModelEMA(t.model)
+    t.optimizer = torch.optim.AdamW(t.model.parameters(), lr=0.01)
+    t.scaler = torch.amp.GradScaler("cuda", enabled=False)
+    t.scheduler = SimpleNamespace(last_epoch=0)
+    t.args = SimpleNamespace()
+    t.epoch = 0
+    t.best_fitness = 0.0
+    t.fitness = 0.0
+    t.metrics = {}
+    t.wdir = tmp_path
+    t.healthy = tmp_path / "last_healthy.pt"
+    t.last = tmp_path / "last.pt"
+    t.device = torch.device("cpu")
+    t.loss = torch.tensor(float("nan"))
+    t._gradient_nonfinite = True
+    t.nan_recovery_attempts = 0
+    t._model_train = MagicMock()
+    t.read_results_csv = MagicMock(return_value={})
+    return t
+
+
+def test_bootstrap_checkpoint_precedes_first_nonfinite_recovery(tmp_path):
+    t = bootstrap_trainer(tmp_path)
+    with patch("ultralytics.engine.trainer.RANK", -1):
+        t._bootstrap_healthy_checkpoint()
+    payload = torch.load(t.healthy, map_location="cpu", weights_only=False)
+    assert BaseTrainer._state_is_finite(payload)
+    assert payload["optimizer"] is not None
+    assert payload["scaler"] == t.scaler.state_dict()
+    assert payload["updates"] == t.ema.updates
+
+    with torch.no_grad():
+        t.model.weight.fill_(99.0)
+    assert t._handle_nan_recovery(0) is True
+    assert torch.allclose(t.model.weight, payload["ema"].float().weight)
+    assert t.optimizer.state_dict()["state"] == {}
+    assert t.scaler.state_dict() == payload["scaler"]
+    assert t.ema.updates == payload["updates"]
+
+
+def test_bootstrap_failure_never_creates_unverified_checkpoint(tmp_path):
+    t = bootstrap_trainer(tmp_path)
+    with torch.no_grad():
+        t.model.weight.fill_(float("nan"))
+    with patch("ultralytics.engine.trainer.RANK", -1), pytest.raises(RuntimeError, match="Initial training state is nonfinite"):
+        t._bootstrap_healthy_checkpoint()
+    assert not t.healthy.exists()
+
+
+def test_bootstrap_broadcasts_rank0_health_to_all_ddp_ranks(tmp_path):
+    t = bootstrap_trainer(tmp_path)
+
+    def copy_rank0_status(status, src):
+        assert src == 0
+        status.fill_(1)
+
+    with patch("ultralytics.engine.trainer.RANK", 1), patch(
+        "torch.distributed.get_backend", return_value="gloo"
+    ), patch("torch.distributed.broadcast", side_effect=copy_rank0_status) as broadcast:
+        t._bootstrap_healthy_checkpoint()
+    broadcast.assert_called_once()
+    assert not t.healthy.exists()

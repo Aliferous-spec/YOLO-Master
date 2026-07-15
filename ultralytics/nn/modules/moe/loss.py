@@ -57,10 +57,13 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     # "No backend type associated with device type cpu".
     if tensor.device.type == "cpu" and dist.get_backend() == "nccl":
         tensor = tensor.cuda()
-    out = tensor.float().clone()  # gradient-preserving; float32 for stable reduce
-    dist.all_reduce(out, op=dist.ReduceOp.SUM)
-    out = out / world
-    return out.to(orig_dtype)
+    local = tensor.float()
+    global_value = local.detach().clone()
+    dist.all_reduce(global_value, op=dist.ReduceOp.SUM)
+    global_value = global_value / world
+    # c10d all_reduce has no autograd kernel. Keep its global numerical value,
+    # while routing gradients only through the local differentiable statistic.
+    return (local + (global_value - local.detach())).to(orig_dtype)
 
 
 def gshard_balance_loss(expert_usage: torch.Tensor, num_experts: int,
@@ -236,8 +239,8 @@ class MoELoss(nn.Module):
         # stable under float16/bfloat16 AMP+DDP, then cast back. Without this,
         # all_reduce on half-precision sums loses precision irrecoverably.
         orig_dtype = tensor.dtype
-        local_sum = tensor.float().sum(dim=0)
-        # We need the global batch size count
+        local_mean = tensor.float().mean(dim=0)
+        local_sum = tensor.float().sum(dim=0).detach()
         local_count = torch.tensor(tensor.size(0), device=tensor.device, dtype=torch.float32)
 
         # NCCL backend only supports CUDA tensors.
@@ -247,8 +250,8 @@ class MoELoss(nn.Module):
 
         dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
-
-        return (local_sum / local_count.clamp(min=1.0)).to(orig_dtype)
+        global_mean = local_sum / local_count.clamp(min=1.0)
+        return (local_mean + (global_mean - local_mean.detach())).to(orig_dtype)
 
     def forward(
         self,

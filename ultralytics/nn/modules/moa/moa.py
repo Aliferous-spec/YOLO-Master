@@ -78,10 +78,12 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     # "No backend type associated with device type cpu".
     if tensor.device.type == "cpu" and dist.get_backend() == "nccl":
         tensor = tensor.cuda()
-    out = tensor.float().clone()
-    dist.all_reduce(out, op=dist.ReduceOp.SUM)
-    out = out / world
-    return out.to(orig_dtype)
+    local = tensor.float()
+    global_value = local.detach().clone()
+    dist.all_reduce(global_value, op=dist.ReduceOp.SUM)
+    global_value = global_value / world
+    # c10d has no autograd kernel: preserve local Jacobian explicitly.
+    return (local + (global_value - local.detach())).to(orig_dtype)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

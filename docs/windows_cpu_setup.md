@@ -100,7 +100,7 @@ print("Ultralytics YOLO loaded successfully!")
 
 **预期输出：**
 ```
-PyTorch version: 2.0.1+cpu
+PyTorch version: 2.4.0+cpu
 CUDA available: False
 CPU threads: 16
 Ultralytics YOLO loaded successfully!

@@ -1,4 +1,4 @@
-﻿# E3 路由透视镜 · 8.24 准入检查（smoke/e3-admission）
+# E3 路由透视镜 · 8.24 准入检查（smoke/e3-admission）
 
 **锁定 commit**：`3eb6cd914b651a06e2cd08ea87d12c28cab95502`（2026-08-23，main 分支）
 **环境**：Python 3.11.9 + torch 2.13.0+cpu（CPU-only，Windows 本机复跑）
@@ -161,12 +161,13 @@ for name, mod in m.named_modules():
 
 **采集机制**：MoE 侧依赖 `ExpertUsageTracker` 的 hook 机制；MoT / Latent 原生自带 `last_routing_snapshot` 属性。两条实现路径并存，统一采集层需要做适配层（adapter），而非假设三类接口一致。
 
-**开销测量方案（暂未实测，仅方案）**：
+**开销测量（已实测，2026-08-25 本机复跑）**：
 
 1. 对照组设计：同一模型、同一批数据，分别在「开启 hook 采集」与「关闭 hook」两种状态下跑 100 次前向，用 `time.perf_counter()` 分别记录总耗时
 2. 测量口径：只测前向 + hook 回调耗时，不含数据加载和后处理
 3. 验收标准：额外开销占比 = (开 hook 耗时 - 关 hook 耗时) / 关 hook 耗时，目标 < 10%
 4. 降级方案：若开销超标，优先降级为「仅静态快照（forward 后一次性读取），不做逐 step 实时记录」，放弃实时面板，保留离线分析能力
+5. **实测结果（2026-08-25，本机复跑）**：运行 `scripts/measure_routing_hook_overhead.py`（yolo-master-n @ 640×640，50 次前向）：关 hook 77.6 ms/次，开 hook 78.7 ms/次，**额外开销 1.50%**，满足 < 10% 目标
 
 ## 十一、风险与降级
 

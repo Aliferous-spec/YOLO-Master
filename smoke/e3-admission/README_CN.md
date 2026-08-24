@@ -1,0 +1,95 @@
+# E3 路由透视镜 · 8.24 准入检查技术产出
+
+**锁定 commit**：`3eb6cd914b651a06e2cd08ea87d12c28cab95502`（2026-08-23，main 分支）
+**环境**：Python 3.12 + torch 2.13（CPU-only）
+**验证方式**：三类路由（MoE / MoT / Latent）全部实测跑通，非纸面推演
+
+---
+
+## 一、复现命令
+
+**环境安装**
+```bash
+git clone https://github.com/Tencent/YOLO-Master.git
+cd YOLO-Master
+pip install -r requirements.txt
+pip install -e .
+```
+
+**MoT 路由 smoke test**（官方脚本，合成场景探测，无需数据集）
+```bash
+python scripts/diagnose_mot_routing.py --synthetic --device cpu --nc 80
+```
+
+**MoE 路由 smoke test**（真实 coco8 数据集，自动下载）
+```python
+from ultralytics import YOLO
+from ultralytics.nn.modules.moe.analysis import ExpertUsageTracker
+
+model = YOLO('ultralytics/cfg/models/master/v0_9/det/yolo-master-n.yaml')
+with ExpertUsageTracker(model.model) as tracker:
+    model.val(data='coco8.yaml', split='val', batch=1, device='cpu', verbose=False)
+    print(tracker.usage_stats)
+```
+
+**Latent Mixture 路由快照采集**
+```python
+from ultralytics import YOLO
+import torch
+
+model = YOLO('ultralytics/cfg/models/26/yolo26-master-latent-n.yaml')
+m = model.model.eval()
+with torch.no_grad():
+    m(torch.randn(1, 3, 640, 640))
+
+for name, mod in m.named_modules():
+    snap = getattr(mod, 'last_routing_snapshot', None)
+    if snap:
+        print(name, list(snap.keys()))
+```
+
+## 二、使用的配置文件
+
+| 类型 | 配置文件路径 |
+|---|---|
+| MoE | `ultralytics/cfg/models/master/v0_9/det/yolo-master-n.yaml` |
+| MoT | `ultralytics/cfg/models/master/v0_10/det/yolo-master-mot-n.yaml`（另有v0_8版本） |
+| Latent | `ultralytics/cfg/models/26/yolo26-master-latent-n.yaml` |
+
+## 三、结果证据
+
+- MoT：`mot_routing_detailed.csv`、`mot_routing_scenarios.csv`、`mot_deformable_activation_check.csv`、`mot_expert_heatmap_top1_share.png`
+- MoE：3 个 router 模块（`model.5.routing`、`model.8.routing`、`model.11.routing`）全部成功挂 hook，在 coco8 真实验证集上采集到专家命中次数（hits）与加权和（weighted_sum）
+- Latent：`model.23/24/25` 三个 LatentMixture 模块均产出非空 `last_routing_snapshot`，字段数达 36 个（随机初始化权重不同，重跑时字段数在 35-36 间可能有±1浮动，属正常现象）
+
+**一个真实观察**：MoT 热力图显示，未训练（随机初始化）模型在全部 4 类合成场景下，`LocalConvTransformer` 专家的 top1_share 恒为 1.00，另外两个专家为 0——即初始化阶段就出现专家坍塌现象，这是训练前基线的真实特征，不是脚本 bug。
+
+## 四、字段字典（Schema 草案，P0 核心交付物）
+
+三类路由模块的原生字段粒度差异很大，统一 schema 需要做字段对齐与降维，而不是简单拼接：
+
+| 统一字段（拟） | MoE 来源 | MoT 来源 | Latent 来源 | 说明 |
+|---|---|---|---|---|
+| `num_experts` | `num_experts` | `num_experts` | `num_experts` | 三类原生都有，可直接对齐 |
+| `top_k` | `top_k` | `top_k` | `top_k` / `training_top_k` / `inference_top_k` | Latent 区分训练/推理两套 top_k，需要在统一层做归一 |
+| `expert_usage` | 由 `ExpertUsageTracker.usage_stats` 聚合 hits/weighted_sum 推导 | `expert_usage`（直接张量） | `expert_usage` | 三类张量形状需统一为 `[num_experts]` 浮点列表 |
+| `aux_loss` | 通过 `routing_protocol.RoutingAuxPublisher` 统一通道获取 | `aux_loss` | `aux_loss` | 唯一天然已经跨三类统一的字段 |
+| `dominant_expert` / `dominant_share` | MoE 诊断类原生支持（`MoELayerDiagnostic`） | 需从 `expert_usage` 现算 | 需从 `expert_usage` 现算 | MoT/Latent 缺此字段，需在采集层补算 |
+| `collapse_flag` | 原生支持 | 需自定义阈值判断（可复用 MoT 热力图观察到的坍塌案例） | 需自定义阈值判断 | 建议阈值可先沿用 MoE 侧的 0.8 |
+| `scene_context` | 无 | `scene_aware` / `scene_stats` / `scene_bias` | 无 | MoT 独有字段，其余两类留空 |
+| `value_fusion_*` | 无 | 无 | `value_fusion_mode` / `value_fusion_weights` | Latent 独有字段，体现其"融合"而非"选择"的路由范式 |
+
+**核心难点**：MoE 偏向"离散选择"语义（dominant expert、collapse），MoT 带场景条件（scene-aware），Latent 是"连续融合"语义（value fusion），三者不是同一套路由范式的简单变体，统一 schema 需要设计一个带 `routing_paradigm` 标记位的父结构，而不是强行拉平字段。
+
+## 五、开销测量方案（暂未实测，仅方案）
+
+1. **对照组设计**：同一模型、同一批数据，分别在"开启 hook 采集"与"关闭 hook"两种状态下跑 100 次前向，用 `time.perf_counter()` 分别记录总耗时
+2. **测量口径**：只测前向 + hook 回调耗时，不含数据加载和后处理
+3. **验收标准**：额外开销占比 = (开 hook 耗时 - 关 hook 耗时) / 关 hook 耗时，目标 < 10%
+4. **降级方案**：若开销超标，优先降级为"仅静态快照（forward 后一次性读取），不做逐 step 实时记录"，放弃实时面板，保留离线分析能力
+
+## 六、风险与降级
+
+- **风险1**：Latent 字段数量（35个）远超 MoE/MoT，若三类强行统一为同一张表，会有大量空值列，可读性差 → **降级**：采用"公共字段 + 各类专属字段"两层结构，而非单一扁平表
+- **风险2**：当前验证均为未训练模型（随机权重），坍塌现象是否为训练前特有还是训练后依然存在，尚未验证 → 后续需在真实训练 checkpoint 上复测
+- **风险3**：MoE 侧目前依赖 `ExpertUsageTracker` 的 hook 机制，与 MoT/Latent 原生自带的 `last_routing_snapshot` 属性机制不是同一套实现路径 → 统一采集层需要做适配层（adapter），而非假设三类接口一致

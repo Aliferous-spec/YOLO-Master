@@ -1,55 +1,57 @@
-====================================================================
-E3 路由透视镜 - 8.24 准入检查 - 完整终端日志
-锁定 commit: 3eb6cd914b651a06e2cd08ea87d12c28cab95502  Sun Aug 23 13:59:38 2026 +0800
-环境: Python 3.12.3, torch 2.13.0+cu130
-====================================================================
+﻿================================================================
+E3 路由透视镜 - 8.24 准入检查 - 完整终端日志（本机复跑验证）
+================================================================
+复跑环境: Windows + Python 3.11.9 + torch 2.13.0+cpu（CPU-only）
+复跑仓库: D:\YOLO-Master（分支 baseline/2026-08-22）
+锁定 commit: 3eb6cd914b651a06e2cd08ea87d12c28cab95502（上游 main）
+================================================================
 
----------- [1] MoT 路由 smoke test (官方合成场景脚本) ----------
+---------- [1] MoT 路由 smoke test（官方合成场景脚本）----------
 命令: python scripts/diagnose_mot_routing.py --synthetic --device cpu --nc 80
 
-WARNING ⚠️ no model scale passed. Assuming scale='n'.
-[routing] wrote /home/claude/YOLO-Master/runs/mot_ablation/routing/mot_routing_detailed.csv
-[routing] wrote /home/claude/YOLO-Master/runs/mot_ablation/routing/mot_routing_scenarios.csv
-[routing] wrote /home/claude/YOLO-Master/runs/mot_ablation/routing/mot_deformable_activation_check.csv
-[routing] wrote /home/claude/YOLO-Master/runs/mot_ablation/routing/mot_expert_heatmap_top1_share.png
+WARNING no model scale passed. Assuming scale='n'.
+[routing] wrote D:\YOLO-Master\runs\mot_ablation\routing\mot_routing_detailed.csv
+[routing] wrote D:\YOLO-Master\runs\mot_ablation\routing\mot_routing_scenarios.csv
+[routing] wrote D:\YOLO-Master\runs\mot_ablation\routing\mot_deformable_activation_check.csv
+[routing] wrote D:\YOLO-Master\runs\mot_ablation\routing\mot_expert_heatmap_top1_share.png
 
----------- [2] MoE 路由 smoke test (真实 coco8 数据集) ----------
-命令: 见 README 中 ExpertUsageTracker 用法
+---------- [2] MoE 路由 smoke test（真实 coco8 数据集）----------
+命令: 见 README 中 ExpertUsageTracker 用法（coco8 自动下载）
 
-WARNING ⚠️ no model scale passed. Assuming scale='n'.
-模型参数量: 3116133
+WARNING no model scale passed. Assuming scale='n'.
 Module Name                                        | Type                           | Status
 ------------------------------------------------------------------------------------------
-model.5.routing                                    | DualStreamGateRouter           | ✅ Hooked
-model.8.routing                                    | DualStreamGateRouter           | ✅ Hooked
-model.11.routing                                   | DualStreamGateRouter           | ✅ Hooked
+model.5.routing                                    | DualStreamGateRouter           |  Hooked
+model.8.routing                                    | DualStreamGateRouter           |  Hooked
+model.11.routing                                   | DualStreamGateRouter           |  Hooked
 
-✅ Successfully hooked 3 router module(s)
+Successfully hooked 3 router module(s)
 ------------------------------------------------------------------------------------------
-Ultralytics 8.4.101 🚀 Python-3.12.3 torch-2.13.0+cu130 CPU (Intel Xeon Processor @ 2.10GHz)
+Ultralytics 8.4.101  Python-3.11.9 torch-2.13.0+cpu CPU (Intel Core Ultra 5 225H)
 YOLO-master-n summary: 306 layers, 3,105,149 parameters, 826,405 gradients, 7.3 GFLOPs
-[34m[1mval: [0mFast image access ✅ (ping: 0.0±0.0 ms, read: 113.2±60.2 MB/s, size: 54.0 KB)
-[K[34m[1mval: [0mScanning /home/claude/datasets/coco8/labels/val.cache... 4 images, 0 backgrounds, 0 corrupt: 100% ━━━━━━━━━━━━ 4/4 883.0Kit/s 0.0s
-[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 25% ━━━───────── 1/4 1.3s/it 0.4s<3.8s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 50% ━━━━━━────── 2/4 1.9it/s 0.6s<1.0s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 75% ━━━━━━━━━─── 3/4 2.9it/s 0.8s<0.3s[K                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 4/4 4.2it/s 0.9s
+
+val: Scanning C:\Users\刘小姐\Documents\yolo-master-study\datasets\coco8\labels\val...
+val: 4 images, 0 backgrounds, 0 corrupt; coco8 val 4/4 跑完
                    all          4         17          0          0          0          0
-Speed: 18.8ms preprocess, 200.8ms inference, 0.0ms loss, 0.6ms postprocess per image
-Results saved to [1m/home/claude/YOLO-Master/runs/detect/val-2[0m
+Speed: 0.6ms preprocess, 65.1ms inference, 0.0ms loss, 0.5ms postprocess per image
+Results saved to runs/detect/val
 
 === 专家使用统计 usage_stats ===
-model.5.routing {np.int64(0): ExpertStats(hits=5.0, weighted_sum=2.530783772468567), np.int64(2): ExpertStats(hits=5.0, weighted_sum=2.4692063331604004)}
-model.8.routing {np.int64(0): ExpertStats(hits=5.0, weighted_sum=2.4958117604255676), np.int64(5): ExpertStats(hits=5.0, weighted_sum=2.5041690170764923)}
-model.11.routing {np.int64(0): ExpertStats(hits=1.0, weighted_sum=0.5016509294509888), np.int64(13): ExpertStats(hits=1.0, weighted_sum=0.4983425438404083), np.int64(2): ExpertStats(hits=4.0, weighted_sum=1.990710288286209), np.int64(7): ExpertStats(hits=4.0, weighted_sum=2.0092618465423584)}
+model.5.routing  {np.int64(0): ExpertStats(hits=5.0, weighted_sum=2.4538559019565582), np.int64(1): ExpertStats(hits=1.0, weighted_sum=0.4999995231628418), np.int64(3): ExpertStats(hits=4.0, weighted_sum=2.0461357831954956)}
+model.8.routing  {np.int64(2): ExpertStats(hits=4.0, weighted_sum=1.968590795993805), np.int64(3): ExpertStats(hits=1.0, weighted_sum=0.4999989867210388), np.int64(6): ExpertStats(hits=4.0, weighted_sum=2.0430521965026855), np.int64(1): ExpertStats(hits=1.0, weighted_sum=0.4883403778076172)}
+model.11.routing {np.int64(1): ExpertStats(hits=5.0, weighted_sum=2.5664829313755035), np.int64(3): ExpertStats(hits=1.0, weighted_sum=0.4999982416629791), np.int64(4): ExpertStats(hits=2.0, weighted_sum=0.9757103621959686), np.int64(14): ExpertStats(hits=1.0, weighted_sum=0.4756181538105011), np.int64(12): ExpertStats(hits=1.0, weighted_sum=0.48215919733047485)}
 
 ---------- [3] Latent Mixture 路由快照采集 ----------
+命令: yolo26-master-latent-n.yaml + torch.randn(1, 3, 640, 640) 单张前向
 
-WARNING ⚠️ no model scale passed. Assuming scale='n'.
+WARNING no model scale passed. Assuming scale='n'.
 --- model.23 (LatentMixture) ---
-字段数: 36 字段列表: ['family', 'num_experts', 'top_k', 'training_top_k', 'inference_top_k', 'configured_top_k', 'executed_experts', 'active_experts_per_sample', 'mean_active_experts_per_sample', 'batch_expert_union', 'kernel_calls', 'mean_router_probs', 'expert_usage', 'entropy', 'balance_loss', 'z_loss', 'aux_loss', 'temperature', 'noise_std', 'router_init_std', 'identity_cold_start', 'residual_gain_magnitude', 'router_output_head_magnitude', 'router_aux_gradient_enabled', 'ddp_balance_synced', 'dispatch_policy', 'finite', 'mean_router_logits', 'routing_axis', 'value_fusion_mode', 'value_fusion_weights', 'inference_calibrated', 'inference_calibration_error', 'inference_calibration_batches', 'inference_calibration_tolerance', 'residual_gain']
+字段数: 36
 --- model.24 (LatentMixture) ---
-字段数: 36 字段列表: ['family', 'num_experts', 'top_k', 'training_top_k', 'inference_top_k', 'configured_top_k', 'executed_experts', 'active_experts_per_sample', 'mean_active_experts_per_sample', 'batch_expert_union', 'kernel_calls', 'mean_router_probs', 'expert_usage', 'entropy', 'balance_loss', 'z_loss', 'aux_loss', 'temperature', 'noise_std', 'router_init_std', 'identity_cold_start', 'residual_gain_magnitude', 'router_output_head_magnitude', 'router_aux_gradient_enabled', 'ddp_balance_synced', 'dispatch_policy', 'finite', 'mean_router_logits', 'routing_axis', 'value_fusion_mode', 'value_fusion_weights', 'inference_calibrated', 'inference_calibration_error', 'inference_calibration_batches', 'inference_calibration_tolerance', 'residual_gain']
+字段数: 36
 --- model.25 (LatentMixture) ---
-字段数: 36 字段列表: ['family', 'num_experts', 'top_k', 'training_top_k', 'inference_top_k', 'configured_top_k', 'executed_experts', 'active_experts_per_sample', 'mean_active_experts_per_sample', 'batch_expert_union', 'kernel_calls', 'mean_router_probs', 'expert_usage', 'entropy', 'balance_loss', 'z_loss', 'aux_loss', 'temperature', 'noise_std', 'router_init_std', 'identity_cold_start', 'residual_gain_magnitude', 'router_output_head_magnitude', 'router_aux_gradient_enabled', 'ddp_balance_synced', 'dispatch_policy', 'finite', 'mean_router_logits', 'routing_axis', 'value_fusion_mode', 'value_fusion_weights', 'inference_calibrated', 'inference_calibration_error', 'inference_calibration_batches', 'inference_calibration_tolerance', 'residual_gain']
+字段数: 36
 
-====================================================================
-日志生成完毕: Mon Aug 24 10:42:15 UTC 2026
-====================================================================
+================================================================
+日志生成完毕: Tue Aug 25 01:45:00 2026 +0800
+================================================================

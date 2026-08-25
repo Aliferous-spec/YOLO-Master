@@ -106,10 +106,10 @@ class LoraTrainingStrategy:
     def apply_layer_decay_to_optimizer(self, optimizer, decay_rate=0.85) -> int:
         """
         Apply layer-wise LR decay to existing optimizer param groups.
-        
+
         This function REPLACES the single LoRA param group with multiple
         param groups, each with a different LR based on layer depth.
-        
+
         PyTorch optimizer requires one param_group per unique LR, so we group
         parameters by their layer index and create one param_group per layer.
 
@@ -165,7 +165,7 @@ class LoraTrainingStrategy:
         # Group LoRA params by layer index for efficient param_group creation
         from collections import defaultdict
         layer_groups = defaultdict(list)
-        
+
         for name, param, _ in lora_params_in_pg:
             factor = factors.get(name, 1.0)
             # Round factor to reduce number of param groups.
@@ -174,11 +174,11 @@ class LoraTrainingStrategy:
             # Previous 3-decimal precision created too many groups (18+), slowing optimizer.
             rounded_factor = round(factor, 1)
             layer_groups[rounded_factor].append(param)
-        
+
         # Remove the original LoRA param group (remove from end to keep indices stable)
         # We need to rebuild param_groups since PyTorch doesn't support deletion
         original_groups = optimizer.param_groups.copy()
-        
+
         # Create new param_groups list
         new_param_groups = []
         for idx, pg in enumerate(original_groups):
@@ -194,15 +194,15 @@ class LoraTrainingStrategy:
                     new_param_groups.append(new_pg)
             else:
                 new_param_groups.append(pg)
-        
+
         # Replace optimizer's param_groups
         optimizer.param_groups = new_param_groups
-        
+
         # Also rebuild state if necessary (state is keyed by parameter object, so it remains valid)
         # But we need to update the optimizer's internal _param_group map if it exists
         if hasattr(optimizer, '_param_groups'):
             optimizer._param_groups = optimizer.param_groups
-        
+
         avg_factor = sum(factors.values()) / len(factors)
         min_factor = min(factors.values())
         max_factor = max(factors.values())
@@ -518,16 +518,16 @@ class LoraTrainingStrategy:
         Compute regularization loss encouraging LoRA A/B matrices to stay orthogonal.
 
         Prevents rank collapse where A·B degenerates into a low-effective-rank product.
-        
+
         Loss = λ × (Σ||A^T A - I||_F + Σ||B^T B - I||_F) / N_pairs
-        
+
         OPTIMIZED (v2): Uses chunked computation to reduce peak GPU memory.
         Instead of accumulating all r×r intermediate matrices simultaneously,
         processes layers in chunks of ``chunk_size`` (default 32). Each chunk's
         loss is computed and immediately reduced to a scalar before the next
         chunk, keeping peak temporary memory at O(chunk_size × r²) instead of
         O(N_layers × r²).
-        
+
         Args:
             model: LoRA-enabled model
             weight: Scaling factor for the loss
@@ -541,7 +541,7 @@ class LoraTrainingStrategy:
             device = next(model.parameters()).device
         except StopIteration:
             device = torch.device('cpu')
-            
+
         if chunk_size is None:
             chunk_size = LoraTrainingStrategy._ORTHO_CHUNK_SIZE
 
@@ -616,12 +616,12 @@ class LoraTrainingStrategy:
     _last_dropout_value = None  # Cache last applied dropout value to avoid redundant updates
 
     @staticmethod
-    def update_dropout_schedule(model, epoch, epochs_total, 
+    def update_dropout_schedule(model, epoch, epochs_total,
                                   start_dropout=0.0, end_dropout=0.15,
                                   schedule_start_ratio=0.3) -> int:
         """
         Dynamically increase LoRA dropout rate as training progresses.
-        
+
         In early phases, low dropout preserves gradient signal for learning.
         In later phases, higher dropout acts as regularizer preventing overfitting.
 
@@ -630,7 +630,7 @@ class LoraTrainingStrategy:
             epoch: Current epoch (0-indexed)
             epochs_total: Total number of training epochs
             start_dropout: Initial dropout rate
-            end_dropout: Final dropout rate  
+            end_dropout: Final dropout rate
             schedule_start_ratio: When to start increasing (fraction of total)
 
         Returns:
@@ -674,7 +674,7 @@ class LoraTrainingStrategy:
         if LoraTrainingStrategy._last_dropout_value is not None and \
            abs(LoraTrainingStrategy._last_dropout_value - current_dropout) < 1e-6:
             return 0  # No change needed
-        
+
         LoraTrainingStrategy._last_dropout_value = current_dropout
 
         updated = 0

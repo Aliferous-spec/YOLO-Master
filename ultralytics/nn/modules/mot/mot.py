@@ -557,7 +557,6 @@ class _DeformableTransformerExpert(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, C, H, W = x.shape
-        N = H * W
 
         # NCHW → NLC
         x_flat = x.flatten(2).transpose(1, 2)  # [B, N, C]
@@ -1098,9 +1097,9 @@ def collect_mot_aux_loss(model: nn.Module) -> torch.Tensor:
         if isinstance(m, (C2fMoT, MoTBlock)):
             if id(m) in seen:
                 continue
-            l = getattr(m, 'last_aux_loss', None)
-            if isinstance(l, torch.Tensor) and l.requires_grad:
-                total = l if total is None else total + l
+            aux = getattr(m, 'last_aux_loss', None)
+            if isinstance(aux, torch.Tensor) and aux.requires_grad:
+                total = aux if total is None else total + aux
             # Mark this module and all its children as seen
             seen.update(id(child) for child in m.modules())
     return total if total is not None else torch.zeros(1, device=_aux_loss_device(model))

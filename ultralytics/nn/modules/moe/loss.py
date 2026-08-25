@@ -287,7 +287,7 @@ class MoELoss(nn.Module):
             # Requires expert_indices.
             if expert_indices is None:
                 raise ValueError("expert_indices is required for hard load balancing.")
-                
+
             usage = self._usage_from_expert_indices(expert_indices)
 
         # Balance Loss: N * sum(importance * usage)
@@ -372,7 +372,7 @@ class MoELoss(nn.Module):
                      (self.entropy_loss_coeff * entropy_loss) + \
                      (self.diversity_loss_coeff * diversity_loss) + \
                      (self.variance_loss_coeff * variance_loss)
-        
+
         # NaN Guard (Graph Safe) — count hits for periodic diagnostics.
         if not torch.isfinite(total_loss).all():
             self._nan_guard_hits += 1
@@ -396,5 +396,5 @@ class MoELoss(nn.Module):
                 "dynamic_schedule": schedule_state.to_dict() if schedule_state is not None else None,
                 "map_saturation_schedule": map_sat_state.to_dict() if map_sat_state is not None else None,
             }
-            
+
         return total_loss

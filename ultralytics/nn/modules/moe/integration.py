@@ -739,7 +739,7 @@ class HyperUltimateMoE(nn.Module):
     HyperUltimateMoE: Integrates channel splitting, fused experts, and smart routing.
     Combines the best of UltimateMoE and HyperFusedMoEv2 for max efficiency.
     """
-    
+
     def __init__(
         self,
         in_channels: int,
@@ -757,16 +757,16 @@ class HyperUltimateMoE(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
         self.capacity_factor = capacity_factor
-        
+
         # Channel Splitting
         self.dynamic_channels = int(in_channels * split_ratio)
         self.static_channels = in_channels - self.dynamic_channels
         self.out_dynamic = int(out_channels * split_ratio)
         self.out_static = out_channels - self.out_dynamic
-        
+
         # Static Path (Optimized with BN)
         self.static_net = nn.Sequential(
-            nn.Conv2d(self.static_channels, self.static_channels, 3, 
+            nn.Conv2d(self.static_channels, self.static_channels, 3,
                      padding=1, groups=self.static_channels, bias=False),
             nn.BatchNorm2d(self.static_channels),
             nn.SiLU(inplace=True),
@@ -774,31 +774,31 @@ class HyperUltimateMoE(nn.Module):
             nn.BatchNorm2d(self.out_static),
             nn.SiLU(inplace=True)
         )
-        
+
         # Ultra-light Routing
         self.routing = UltraLightRouter(
             self.dynamic_channels, num_experts, top_k,
             use_cache=use_routing_cache
         )
-        
+
         # MatMul Fused Experts
         self.fused_experts = MatMulFusedExperts(
-            self.dynamic_channels, self.out_dynamic, 
+            self.dynamic_channels, self.out_dynamic,
             num_experts, num_groups
         )
-        
+
         # Adaptive Capacity Control
         self.complexity_estimator = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(self.dynamic_channels, 1, 1),
             nn.Sigmoid()
         )
-        
+
         # Progressive Sparsity
         self.register_buffer('training_step', torch.tensor(0), persistent=False)
         self.register_buffer('current_top_k', torch.tensor(num_experts))
         self.warmup_steps = 5000
-        
+
         # Adaptive Load Balancing (rev5: GShard-scale coeffs, see controller note)
         self.balance_controller = AdaptiveBalanceController(
             num_experts,
@@ -806,13 +806,13 @@ class HyperUltimateMoE(nn.Module):
             final_coeff=0.1,
             decay_steps=50000
         )
-        
+
         # Output Fusion Layer
         self.proj = nn.Conv2d(out_channels, out_channels, 1, bias=False)
         self.bn = nn.GroupNorm(get_safe_groups(out_channels, num_groups), out_channels)
-        
+
         self._init_weights()
-    
+
     def _init_weights(self):
         """Orthogonal Initialization + Variance Scaling"""
         for m in self.modules():
@@ -834,11 +834,11 @@ class HyperUltimateMoE(nn.Module):
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-        
+
         # Router Small Variance Initialization
         if hasattr(self.routing.router[-1], 'weight'):
             nn.init.normal_(self.routing.router[-1].weight, std=0.05)
-    
+
     def _update_sparsity(self):
         """Progressive Sparsity Scheduling"""
         if self.training_step < self.warmup_steps:
@@ -847,23 +847,23 @@ class HyperUltimateMoE(nn.Module):
             self.current_top_k.fill_(max(self.top_k, int(current_k)))
         else:
             self.current_top_k.fill_(self.top_k)
-    
+
     def forward(self, x):
         B, C, H, W = x.shape
-        
+
         # Progressive Sparsity
         if self.training:
             self._update_sparsity()
             self.training_step += 1
-        
+
         # 1. Channel Split
         x_static, x_dynamic = torch.split(
             x, [self.static_channels, self.dynamic_channels], dim=1
         )
-        
+
         # 2. Static Path (Parallel)
         out_static = self.static_net(x_static)
-        
+
         # 3. Capacity selection (no per-forward GPU->CPU sync).
         # top_k is a fixed Python int (progressive sparsity already adjusts
         # current_top_k via a buffer); complexity now scales expert *weights*
@@ -873,55 +873,55 @@ class HyperUltimateMoE(nn.Module):
         # the buffer but we avoid .item() sync by using the Python int.
         adaptive_top_k = self.top_k
         complexity_scale = self.complexity_estimator(x_dynamic).mean().clamp(0.3, 1.5)
-        
+
         # 4. Routing Decision (Mixed Precision)
         with autocast(enabled=torch.cuda.is_available()):
             routing_weights, routing_indices, routing_stats = self.routing(
                 x_dynamic, adaptive_top_k
             )
         routing_weights = routing_weights * complexity_scale
-        
+
         # 5. MatMul Fused Expert Computation
         out_dynamic = self.fused_experts(
             x_dynamic, routing_weights, routing_indices, adaptive_top_k
         )
-        
+
         # 6. Feature Fusion & Residual
         out_concat = torch.cat([out_static, out_dynamic], dim=1)
         out = self.proj(out_concat)
         out = self.bn(out) + x
-        
+
         # 7. Adaptive Load Balancing Loss
         if self.training:
             balance_loss = self.balance_controller(routing_stats, self.training_step)
             _registry_set(self, balance_loss)
-        
+
         return out
-    
+
     @property
     def aux_loss(self):
         return _get_moe_aux_loss(self)
-    
+
     def get_gflops(self, input_shape):
         """Accurate FLOPs Calculation"""
         B, C, H, W = input_shape
         flops = {}
-        
+
         # 1. Static Path
         flops['static_path'] = FlopsUtils.count_conv2d(
             self.static_net, (B, self.static_channels, H, W)
         ) / 1e9
-        
+
         # 2. Router
         flops['router'] = self.routing.compute_flops(
             (B, self.dynamic_channels, H, W)
         ) / 1e9
-        
+
         # 3. Complexity Estimator
         flops['complexity_estimator'] = FlopsUtils.count_conv2d(
             self.complexity_estimator, (B, self.dynamic_channels, H, W)
         ) / 1e9
-        
+
         # 4. MatMul Fused Experts (Consider Top-K Sparsity)
         # Note: MatMul computes all experts, but effectively uses Top-K.
         # Use the group's own compute_flops (attribute is `fused_conv`, not `fused_weight`).
@@ -931,23 +931,23 @@ class HyperUltimateMoE(nn.Module):
         # Effective computation = all * (top_k / num_experts)
         flops['fused_experts'] = all_experts_flops / 1e9
         flops['effective_experts'] = all_experts_flops * (self.top_k / self.num_experts) / 1e9
-        
+
         # 5. Projection Layer
         flops['projection'] = FlopsUtils.count_conv2d(
             self.proj, (B, self.out_channels, H, W)
         ) / 1e9
-        
+
         # Total (Using effective computation)
         flops['total_gflops'] = (
-            flops['static_path'] + 
-            flops['router'] + 
-            flops['complexity_estimator'] + 
-            flops['effective_experts'] + 
+            flops['static_path'] +
+            flops['router'] +
+            flops['complexity_estimator'] +
+            flops['effective_experts'] +
             flops['projection']
         )
-        
+
         return flops
-    
+
     def __deepcopy__(self, memo):
         return _robust_deepcopy(self, memo)
 
@@ -957,7 +957,7 @@ class UltimateOptimizedMoE(nn.Module):
     UltimateOptimizedMoE: Improved version based on HyperUltimateMoE.
     Enhancements: Dynamic temperature, entropy loss, AMP integration, and complexity-based skipping.
     """
-    
+
     def __init__(
         self,
         in_channels: int,
@@ -981,13 +981,13 @@ class UltimateOptimizedMoE(nn.Module):
         self.initial_temperature = initial_temperature
         self.final_temperature = final_temperature
         self.entropy_coeff = entropy_coeff
-        
+
         # Channel Split
         self.dynamic_channels = int(in_channels * split_ratio)
         self.static_channels = in_channels - self.dynamic_channels
         self.out_dynamic = int(out_channels * split_ratio)
         self.out_static = out_channels - self.out_dynamic
-        
+
         # Static Path (BN for speed)
         self.static_net = nn.Sequential(
             nn.Conv2d(self.static_channels, self.static_channels, 3, padding=1, groups=self.static_channels, bias=False),
@@ -997,25 +997,25 @@ class UltimateOptimizedMoE(nn.Module):
             nn.BatchNorm2d(self.out_static),
             nn.SiLU(inplace=True)
         )
-        
+
         # Ultra-light Router (Supports cache + dynamic temperature)
         self.routing = UltraLightRouter(self.dynamic_channels, num_experts, top_k, temperature=initial_temperature, use_cache=use_routing_cache)
-        
+
         # Fused Experts (GN for stability)
         self.fused_experts = MatMulFusedExperts(self.dynamic_channels, self.out_dynamic, num_experts, num_groups)
-        
+
         # Complexity Estimator
         self.complexity_estimator = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(self.dynamic_channels, 1, 1),
             nn.Sigmoid()
         )
-        
+
         # Progressive Sparsity
         self.register_buffer('training_step', torch.tensor(0), persistent=False)
         self.register_buffer('current_top_k', torch.tensor(num_experts))
         self.warmup_steps = 5000
-        
+
         # Adaptive Balancing (Add Entropy)
         self.balance_controller = AdaptiveBalanceController(num_experts, initial_coeff=1.0, final_coeff=0.1, decay_steps=50000)  # rev5: GShard-scale
         self.balance_controller.entropy_coeff = entropy_coeff  # New: Inject entropy coefficient
@@ -1026,13 +1026,13 @@ class UltimateOptimizedMoE(nn.Module):
         # (moe_balance_loss, moe_router_z_loss) propagate into this module.
         self.balance_loss_coeff = self.balance_controller.initial_coeff
         self.router_z_loss_coeff = 0.0
-        
+
         # Output Fusion
         self.proj = nn.Conv2d(out_channels, out_channels, 1, bias=False)
         self.bn = nn.GroupNorm(get_safe_groups(out_channels, num_groups), out_channels)
-        
+
         self._init_weights()
-    
+
     def _init_weights(self):
         """Enhanced Initialization: Kaiming + Small Std + Diversity"""
         for m in self.modules():
@@ -1043,12 +1043,12 @@ class UltimateOptimizedMoE(nn.Module):
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-        
+
         # Router Small Std + Slight Noise Diversity
         if hasattr(self.routing.router[-1], 'weight'):
             nn.init.normal_(self.routing.router[-1].weight, std=0.05)
             self.routing.router[-1].weight.data += torch.randn_like(self.routing.router[-1].weight.data) * 0.001  # New: Slight noise
-    
+
     def _update_sparsity_and_temperature(self):
         """Progressive Sparsity + Dynamic Temperature"""
         progress = min(1.0, self.training_step.float() / self.warmup_steps)
@@ -1059,78 +1059,78 @@ class UltimateOptimizedMoE(nn.Module):
         current_temp = self.initial_temperature * (1 - progress) + self.final_temperature * progress
         # Clamp temperature to avoid division by zero or explosion
         self.routing.temperature = max(current_temp, 0.1)
-    
+
     def forward(self, x):
         B, C, H, W = x.shape
-        
+
         if self.training:
             self._update_sparsity_and_temperature()
             self.training_step += 1
-        
+
         # Channel Split
         x_static, x_dynamic = torch.split(x, [self.static_channels, self.dynamic_channels], dim=1)
-        
+
         # Complexity Estimation (graph-safe NaN guard, no extra sync).
         # complexity scales expert *weights*; top_k stays a fixed Python int so we
         # avoid the per-forward complexity_score.item() GPU->CPU sync.
         complexity_scale = self.complexity_estimator(x_dynamic).mean()
         complexity_scale = torch.nan_to_num(complexity_scale, nan=1.0, posinf=1.5, neginf=0.3).clamp(0.3, 1.5)
         out_static = self.static_net(x_static)
-        
+
         # Use fixed top_k — avoids per-forward .item() GPU→CPU sync.
         adaptive_top_k = self.top_k
-        
+
         # Routing (AMP Acceleration - only on CUDA)
         with autocast(enabled=torch.cuda.is_available()):  # New: Mixed Precision
             routing_weights, routing_indices, routing_stats = self.routing(x_dynamic, adaptive_top_k)
         routing_weights = routing_weights * complexity_scale
-        
+
         # Fused Experts
         out_dynamic = self.fused_experts(x_dynamic, routing_weights, routing_indices, adaptive_top_k)
-        
+
         # Fusion + Residual
         out_concat = torch.cat([out_static, out_dynamic], dim=1)
         out = self.proj(out_concat)
         out = self.bn(out) + x
-        
+
         # Balancing Loss (With Entropy)
         if self.training:
             # Sync trainer-injected coefficient into the controller before computing loss
             self.balance_controller.initial_coeff = self.balance_loss_coeff
             balance_loss = self.balance_controller(routing_stats, self.training_step)
             _registry_set(self, balance_loss)
-        
+
         return out
-    
+
     @property
     def aux_loss(self):
         return _get_moe_aux_loss(self)
-    
+
     def get_gflops(self, input_shape):
         B, C, H, W = input_shape
         flops = {}
-        
+
         # Static path — always fully computed in forward(); no skipping mechanism
         # exists, so report the true FLOPs (the previous *0.9 "assume 10% skip"
         # factor was fictitious and understated real cost).
         flops['static_path'] = FlopsUtils.count_conv2d(self.static_net, (B, self.static_channels, H, W)) / 1e9
-        
+
         # Router
         flops['router'] = self.routing.compute_flops((B, self.dynamic_channels, H, W)) / 1e9
-        
+
         # Estimator
         flops['complexity_estimator'] = FlopsUtils.count_conv2d(self.complexity_estimator, (B, self.dynamic_channels, H, W)) / 1e9
-        
+
         # Experts (effective computation)
         all_experts_flops = self.fused_experts.compute_flops((B, self.dynamic_channels, H, W))
         flops['effective_experts'] = all_experts_flops * (self.top_k / self.num_experts) / 1e9
-        
+
         # Projection
         flops['projection'] = FlopsUtils.count_conv2d(self.proj, (B, self.out_channels, H, W)) / 1e9
-        
+
         flops['total_gflops'] = sum(flops.values())
         return flops
-    
+
     def get_efficiency_stats(self, input_shape):
         flops = self.get_gflops(input_shape)
         return {
@@ -1140,10 +1140,10 @@ class UltimateOptimizedMoE(nn.Module):
             'current_temperature': float(self.routing.temperature) if hasattr(self.routing, 'temperature') else 1.0,
             'current_top_k': int(self.current_top_k) if self.current_top_k.numel() == 1 else self.top_k
         }
-    
+
     def __deepcopy__(self, memo):
         return _robust_deepcopy(self, memo)
-        
+
 # ---------------------------------------------------------------------------
 # Backward-compatibility aliases
 # ---------------------------------------------------------------------------

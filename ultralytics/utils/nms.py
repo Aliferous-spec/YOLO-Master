@@ -167,7 +167,7 @@ def non_max_suppression(
         if (weighted or cluster) and i.shape[0] > 0 and not rotated:
             # Weighted NMS or Cluster-Weighted NMS
             keep_boxes = boxes[i]  # Boxes with class offsets (for IoU)
-            
+
             # Optimization: Only consider boxes with sufficient confidence for fusion
             if cluster:
                  # Reuse high confidence candidates
@@ -176,7 +176,7 @@ def non_max_suppression(
                      _, topk_idx = scores.topk(3000)
                      candidate_mask = torch.zeros_like(scores, dtype=torch.bool)
                      candidate_mask[topk_idx] = True
-                 
+
                  candidate_boxes = boxes[candidate_mask]  # With offsets (for IoU)
                  candidate_boxes_raw = x[candidate_mask, :4]  # Without offsets (for averaging)
                  candidate_scores = scores[candidate_mask]
@@ -188,21 +188,21 @@ def non_max_suppression(
             if candidate_boxes.shape[0] > 0:
                 # Calculate IoU between kept boxes and candidate boxes (using offsets to respect classes)
                 iou = box_iou(keep_boxes, candidate_boxes)
-                
+
                 # Identify overlapping boxes
                 mask = iou > iou_thres
-                
+
                 if cluster:
                     # Cluster-Weighted NMS: Gaussian weighting based on IoU
                     weights = candidate_scores * torch.exp(-(1 - iou) ** 2 / sigma) * mask
                 else:
                     # Standard Weighted NMS: Linear weighting
                     weights = candidate_scores * mask
-                
+
                 # Calculate weighted coordinates using RAW coordinates (no offsets)
                 weights_sum = weights.sum(1, keepdim=True) + 1e-6
                 new_xy = (weights @ candidate_boxes_raw) / weights_sum
-                
+
                 # Update kept boxes
                 x[i, :4] = new_xy
 

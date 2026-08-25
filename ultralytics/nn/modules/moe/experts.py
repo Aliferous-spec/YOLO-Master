@@ -160,7 +160,7 @@ class InvertedResidualExpert(nn.Module):
             nn.GroupNorm(get_safe_groups(hidden_dim, num_groups), hidden_dim),
             nn.SiLU(inplace=True),
             # 2. Depthwise Spatial
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size, padding=kernel_size//2, 
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size, padding=kernel_size//2,
                       groups=hidden_dim, bias=False),
             nn.GroupNorm(get_safe_groups(hidden_dim, num_groups), hidden_dim),
             nn.SiLU(inplace=True),

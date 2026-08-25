@@ -565,11 +565,11 @@ class HyperSplitMoE(nn.Module):
         self.top_k = top_k
         self.balance_loss_coeff = balance_loss_coeff
         self.router_z_loss_coeff = router_z_loss_coeff
-        
+
         # Calculate split channels
         self.dynamic_channels = int(in_channels * split_ratio)
         self.static_channels = in_channels - self.dynamic_channels
-        
+
         # Ensure output channels alignment
         self.out_dynamic = int(out_channels * split_ratio)
         self.out_static = out_channels - self.out_dynamic
@@ -586,7 +586,7 @@ class HyperSplitMoE(nn.Module):
 
         # 2. Dynamic Router (Global Pooling -> Conv -> Expert Scores)
         self.router = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1), 
+            nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(self.dynamic_channels, self.dynamic_channels // router_reduction, 1),
             nn.SiLU(inplace=True),
             nn.Conv2d(self.dynamic_channels // router_reduction, num_experts, 1)
@@ -600,12 +600,12 @@ class HyperSplitMoE(nn.Module):
 
         # Auxiliary loss function
         self.moe_loss_fn = MoELoss(
-            balance_loss_coeff=balance_loss_coeff, 
-            z_loss_coeff=router_z_loss_coeff, 
-            num_experts=num_experts, 
+            balance_loss_coeff=balance_loss_coeff,
+            z_loss_coeff=router_z_loss_coeff,
+            num_experts=num_experts,
             top_k=top_k
         )
-        
+
         # Final fusion layer (1x1 Conv)
         self.proj = nn.Conv2d(out_channels, out_channels, 1, bias=False)
         self.bn = nn.BatchNorm2d(out_channels)
@@ -625,7 +625,7 @@ class HyperSplitMoE(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
-        
+
         # 1. Channel Split
         x_static, x_dynamic = torch.split(x, [self.static_channels, self.dynamic_channels], dim=1)
 
@@ -635,8 +635,8 @@ class HyperSplitMoE(nn.Module):
         # 3. Dynamic Path Forward (MoE)
         # 3.1 Calculate routing logits
         # Sample-level routing: [B, num_experts, 1, 1]
-        router_logits = self.router(x_dynamic) 
-        
+        router_logits = self.router(x_dynamic)
+
         # 3.2 Top-K Selection
         router_probs = F.softmax(router_logits, dim=1)
         topk_weights, topk_indices = torch.topk(router_probs, self.top_k, dim=1)
@@ -644,11 +644,6 @@ class HyperSplitMoE(nn.Module):
         # 3.3 Calculate Load Balancing Loss (Training only)
         if self.training:
             # Record data for loss calculation
-            loss_info = {
-                'router_probs': router_probs,
-                'router_logits': router_logits,
-                'topk_indices': topk_indices
-            }
             aux_loss = self.moe_loss_fn(router_probs, router_logits, topk_indices)
             _registry_set(self, aux_loss)
 
@@ -665,12 +660,12 @@ class HyperSplitMoE(nn.Module):
 
         # 4. Feature Concatenation & Fusion
         out_concat = torch.cat([out_static, out_dynamic], dim=1)
-        
+
         # 5. Channel Shuffle (Optional, enhances information flow) & Projection
         # Mix static and dynamic information (ShuffleNet-like)
         out = self.proj(out_concat)
         out = self.bn(out)
-        
+
         return out + x  # Residual connection
 
     @property
@@ -684,22 +679,22 @@ class HyperSplitMoE(nn.Module):
         """Accurate GFLOPs calculation, demonstrating split strategy benefits."""
         B, C, H, W = input_shape
         flops = {}
-        
+
         # 1. Static Path
         flops['static_path'] = FlopsUtils.count_conv2d(self.static_net, (B, self.static_channels, H, W)) / 1e9
-        
+
         # 2. Router (Note: input is downsampled)
         flops['router'] = FlopsUtils.count_conv2d(self.router, (B, self.dynamic_channels, H, W)) / 1e9
-        
+
         # 3. Experts (Top-K only)
         # Calculate single expert FLOPs
         single_expert_flops = self.experts[0].compute_flops((1, self.dynamic_channels, H, W))
         # Total Expert FLOPs = Single * Batch * TopK
         flops['sparse_experts'] = (single_expert_flops * B * self.top_k) / 1e9
-        
+
         # 4. Projection
         flops['projection'] = FlopsUtils.count_conv2d(self.proj, (B, self.out_channels, H, W)) / 1e9
-        
+
         flops['total_gflops'] = sum(flops.values())
         return flops
 
@@ -709,7 +704,7 @@ class HyperFusedMoE(nn.Module):
     HyperFusedMoE: Optimizes accuracy and speed using zero-cost routing and fused experts.
     Features: Zero-cost feature reuse, fused kernels, adaptive balancing, and progressive sparsity.
     """
-    
+
     def __init__(
         self,
         in_channels: int,
@@ -728,35 +723,35 @@ class HyperFusedMoE(nn.Module):
         self.top_k = top_k
         self.adaptive_balance = adaptive_balance
         self.progressive_sparsity = progressive_sparsity
-        
+
         # Zero-cost Routing or UltraEfficientRouter
         if use_zero_cost_routing:
             self.routing = ZeroCostRouter(in_channels, num_experts, top_k)
         else:
             self.routing = UltraEfficientRouter(in_channels, num_experts, top_k=top_k)
-        
+
         # Fused Expert Group
         self.fused_experts = FusedExpertGroup(
             in_channels, out_channels, num_experts, num_groups, top_k=top_k
         )
-        
+
         # Lightweight Shared Path
         self.shared_path = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 1, bias=False, groups=num_groups),
             nn.GroupNorm(get_safe_groups(out_channels, num_groups), out_channels),
             nn.SiLU(inplace=True)
         )
-        
+
         # Adaptive Load Balancing
         if adaptive_balance:
             self.balance_controller = AdaptiveBalanceController(num_experts)
-        
+
         # Progressive sparsity control
         self.register_buffer('training_step', torch.tensor(0), persistent=False)
         self.register_buffer('current_top_k', torch.tensor(num_experts))
-        
+
         self._init_weights()
-    
+
     def _init_weights(self):
         """Improved initialization strategy"""
         for m in self.modules():
@@ -769,14 +764,14 @@ class HyperFusedMoE(nn.Module):
             elif isinstance(m, (nn.GroupNorm, nn.BatchNorm2d)):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-    
+
     def forward(self, x):
         B, C, H, W = x.shape
-        
+
         # === Progressive Sparsity Scheduling ===
         if self.training and self.progressive_sparsity:
             self._update_sparsity()
-        
+
         # Use fixed top_k — avoids per-forward .item() GPU→CPU sync.
         # Progressive sparsity still fills the buffer for diagnostics.
         adaptive_top_k = self.top_k
@@ -784,22 +779,22 @@ class HyperFusedMoE(nn.Module):
         # === 1. Zero-cost Routing ===
         # routing_weights: [B, k, 1, 1], routing_indices: [B, k, 1, 1]
         routing_weights, routing_indices, routing_stats = self.routing(x, adaptive_top_k)
-        
+
         # === 2. Shared Path (Parallel Computation) ===
         shared_out = self.shared_path(x)
-        
+
         # === 3. Fused Expert Computation (Key Optimization) ===
         # Check shapes
         # routing_indices is [B, top_k, 1, 1] from ZeroCostRouter
-        
+
         expert_out = self.fused_experts(
-            x, routing_weights, routing_indices, 
+            x, routing_weights, routing_indices,
             adaptive_top_k
         )
-        
+
         # === 4. Output Fusion ===
         output = shared_out + expert_out
-        
+
         # === 5. Adaptive Load Balancing ===
         if self.training:
             if self.adaptive_balance:
@@ -808,12 +803,12 @@ class HyperFusedMoE(nn.Module):
                 )
             else:
                 balance_loss = self._compute_static_balance_loss(routing_stats)
-            
+
             _registry_set(self, balance_loss)
             self.training_step += 1
-        
+
         return output
-    
+
     def _update_sparsity(self):
         """Progressive Sparsity: Use more experts early in training, gradually sparse later."""
         warmup_steps = 5000
@@ -824,7 +819,7 @@ class HyperFusedMoE(nn.Module):
             self.current_top_k.fill_(max(self.top_k, int(current_k)))
         else:
             self.current_top_k.fill_(self.top_k)
-    
+
     def _compute_static_balance_loss(self, routing_stats):
         """Static load balancing loss (GShard scale).
 
@@ -841,11 +836,11 @@ class HyperFusedMoE(nn.Module):
         if isinstance(probs, torch.Tensor):
             return differentiable_balance_loss(probs, usage, self.num_experts, reduce_ddp=should_reduce_ddp(self))
         return gshard_balance_loss(usage, self.num_experts, reduce_ddp=should_reduce_ddp(self))
-    
+
     @property
     def aux_loss(self):
         return _get_moe_aux_loss(self)
-    
+
     def __deepcopy__(self, memo):
         return _robust_deepcopy(self, memo)
 
@@ -859,69 +854,69 @@ class ZeroCostRouter(nn.Module):
     2. Requires only one 1x1 convolution to map statistics to expert scores.
     3. Reduces FLOPs by over 95%.
     """
-    
+
     def __init__(self, in_channels, num_experts, top_k, temperature=1.0):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         self.temperature = temperature
-        
+
         # Statistics dimension: mean + std = 2 * in_channels
         stat_dim = 2 * in_channels
-        
+
         # Ultra-lightweight mapping network
         self.router = nn.Sequential(
             nn.Linear(stat_dim, num_experts, bias=False),
             nn.Softmax(dim=1)
         )
-        
+
         # Initialize with moderate variance for input-dependent routing
         nn.init.normal_(self.router[0].weight, std=0.05)
-    
+
     def forward(self, x, top_k=None):
         B, C, H, W = x.shape
         current_top_k = max(1, min(int(self.top_k if top_k is None else top_k), self.num_experts))
-        
+
         # === Zero-cost Feature Extraction ===
         # Global statistics (Overlaps with BN computation, near zero cost)
         mean = x.mean(dim=[2, 3])  # [B, C]
         # Use unbiased=False to avoid DoF warning when H*W <= 1 (e.g. classification head)
         std = x.std(dim=[2, 3], unbiased=False) if H * W > 1 else torch.zeros_like(mean)
         stats = torch.cat([mean, std], dim=1)  # [B, 2C]
-        
+
         # === Routing Decision ===
         router_logits = self.router(stats) / self.temperature  # [B, num_experts]
-        
+
         # Clamp logits for stability
         router_logits = router_logits.clamp(-30.0, 30.0)
-        
+
         router_probs = F.softmax(router_logits, dim=1)
-        
+
         # Top-K Selection
         topk_probs, topk_indices = torch.topk(router_probs, current_top_k, dim=1)
-        
+
         # Renormalization
         topk_probs = topk_probs / (topk_probs.sum(dim=1, keepdim=True) + 1e-6)
-        
+
         # Expand to spatial dimensions
         routing_weights = topk_probs.view(B, current_top_k, 1, 1)
         routing_indices = topk_indices.view(B, current_top_k, 1, 1)
-        
+
         # Statistical Information
         expert_usage = torch.zeros(self.num_experts, device=x.device)
-        expert_usage.scatter_add_(0, topk_indices.view(-1), 
+        expert_usage.scatter_add_(0, topk_indices.view(-1),
                                   torch.ones_like(topk_indices.view(-1), dtype=torch.float32))
         expert_usage = expert_usage / (B * current_top_k)
-        
+
         routing_stats = {
             'router_probs': router_probs,
             'router_logits': router_logits,
             'topk_indices': topk_indices,
             'expert_usage': expert_usage
         }
-        
+
         return routing_weights, routing_indices, routing_stats
-    
+
     def compute_flops(self, input_shape):
         """FLOPs calculation"""
         B, C, H, W = input_shape
@@ -940,7 +935,7 @@ class FusedExpertGroup(nn.Module):
     2. Uses grouped convolution for expert isolation.
     3. Uses dynamic slicing to extract Top-K expert outputs.
     """
-    
+
     def __init__(self, in_channels, out_channels, num_experts, num_groups=8, top_k=2):
         super().__init__()
         self.num_experts = num_experts
@@ -951,7 +946,7 @@ class FusedExpertGroup(nn.Module):
         while conv_groups > 1 and (in_channels % conv_groups != 0 or fused_out_channels % conv_groups != 0):
             conv_groups -= 1
         self.num_groups = max(1, conv_groups)
-        
+
         # === Fused Convolution: Merged weights of all experts ===
         # Output channels = num_experts * out_channels
         self.fused_conv = nn.Conv2d(
@@ -962,7 +957,7 @@ class FusedExpertGroup(nn.Module):
             groups=self.num_groups,
             bias=False
         )
-        
+
         # Independent normalization affine parameters for each expert. Keeping
         # them as compact tables avoids stacking ModuleList parameters every
         # forward while preserving per-expert scaling.
@@ -970,7 +965,7 @@ class FusedExpertGroup(nn.Module):
         self.norm_eps = 1e-5
         self.expert_norm_weight = nn.Parameter(torch.ones(num_experts, out_channels))
         self.expert_norm_bias = nn.Parameter(torch.zeros(num_experts, out_channels))
-        
+
         self.activation = nn.SiLU(inplace=True)
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
@@ -986,7 +981,7 @@ class FusedExpertGroup(nn.Module):
             state_dict[bias_key] = torch.stack([state_dict.pop(k) for k in legacy_bias_keys], dim=0)
 
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
-    
+
     def forward(self, x, routing_weights, routing_indices, top_k):
         B, C, H, W = x.shape
         E, OC = self.num_experts, self.out_channels
@@ -1019,7 +1014,7 @@ class FusedExpertGroup(nn.Module):
         output = (normed * wts.view(B, top_k, 1, 1, 1)).sum(dim=1)  # [B, OC, H, W]
 
         return output
-    
+
     def compute_flops(self, input_shape):
         """FLOPs calculation"""
         B, C, H, W = input_shape
@@ -1820,7 +1815,7 @@ class AdaptiveBalanceController(nn.Module):
     2. Mid Training: Gradually decrease weight.
     3. Late Training: Low weight, allowing expert differentiation.
     """
-    
+
     def __init__(
         self,
         num_experts,
@@ -1843,14 +1838,14 @@ class AdaptiveBalanceController(nn.Module):
             MoEDynamicScheduler(dynamic_scheduler_config) if dynamic_scheduler_config is not None else None
         )
         self.last_dynamic_schedule = None
-        
+
         # Learnable expert importance weights
         self.expert_importance = nn.Parameter(torch.ones(num_experts))
-    
+
     def forward(self, routing_stats, training_step):
         """Calculate adaptive load balancing loss."""
         expert_usage = routing_stats['expert_usage']  # [num_experts]
-        
+
         # === 1. Dynamic Coefficient Decay ===
         progress = min(1.0, training_step.float() / self.decay_steps)
         current_coeff = self.initial_coeff * (1 - progress) + self.final_coeff * progress
@@ -1858,7 +1853,7 @@ class AdaptiveBalanceController(nn.Module):
             schedule_state = self.dynamic_scheduler.step(expert_usage, float(current_coeff))
             current_coeff = schedule_state.balance_loss_coeff
             self.last_dynamic_schedule = schedule_state.to_dict()
-        
+
         # === 2. Differentiable Load Balancing (GShard scale, grad -> router) ===
         # importance = mean(router_probs) keeps the gradient path to the router;
         # the learnable expert_importance acts as a (soft) target prior. Falls

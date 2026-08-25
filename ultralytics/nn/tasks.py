@@ -35,7 +35,6 @@ from ultralytics.nn.modules import (
     C2fPSA,
     C3Ghost,
     C3k2,
-    C3k2UltraPro,
     C3x,
     CBFuse,
     CBLinear,
@@ -225,13 +224,13 @@ class BaseModel(torch.nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            
+
             # Gradient Checkpointing Logic
             if use_gc:
                 x = self._apply_checkpointing(m, x)
             else:
                 x = m(x)  # run
-            
+
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
@@ -244,11 +243,11 @@ class BaseModel(torch.nn.Module):
     def _apply_checkpointing(self, m, x):
         """
         Applies gradient checkpointing to a module if conditions are met.
-        
+
         Args:
             m (nn.Module): The module to run.
             x (torch.Tensor or list): The input tensor(s).
-            
+
         Returns:
             torch.Tensor: The output of the module.
         """
@@ -259,7 +258,7 @@ class BaseModel(torch.nn.Module):
             requires_grad = x.requires_grad
         else:
             requires_grad = False
-            
+
         if not requires_grad:
             return m(x)
 
@@ -272,8 +271,8 @@ class BaseModel(torch.nn.Module):
             return m(x)
 
         # 2. Check if module supports checkpointing (has state to save)
-        is_heavy = len(list(m.parameters())) > 0 
-        
+        is_heavy = len(list(m.parameters())) > 0
+
         # 3. Apply Checkpoint
         if is_heavy:
             # Note: use_reentrant=False is preferred for modern PyTorch
@@ -286,7 +285,7 @@ class BaseModel(torch.nn.Module):
                     if isinstance(out, list):
                         return tuple(out) # Checkpoint expects tuple of tensors
                     return out
-                
+
                 out = torch.utils.checkpoint.checkpoint(wrapper, *x, use_reentrant=False)
                 if isinstance(out, tuple):
                     return list(out)
@@ -961,13 +960,13 @@ class RTDETRDetectionModel(DetectionModel):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            
+
             # Gradient Checkpointing Logic
             if use_gc:
                 x = self._apply_checkpointing(m, x)
             else:
                 x = m(x)  # run
-            
+
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)

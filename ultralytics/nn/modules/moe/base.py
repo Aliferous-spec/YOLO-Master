@@ -514,7 +514,7 @@ class ES_MOE(nn.Module):
         # Guard against NaN loss (graph-safe: keep grad_fn instead of new leaf)
         if not torch.isfinite(load_balance_loss).all():
             load_balance_loss = torch.nan_to_num(load_balance_loss, nan=0.0, posinf=0.0, neginf=0.0)
-            
+
         if not hasattr(self, "load_balancing_loss"):
             self.register_buffer("load_balancing_loss", torch.tensor(0.0), persistent=False)
         if not hasattr(self, "expert_usage_counts"):
@@ -523,12 +523,12 @@ class ES_MOE(nn.Module):
             self.load_balancing_loss = self.load_balancing_loss.to(load_balance_loss.device).reshape(())
         self.load_balancing_loss.copy_(load_balance_loss.detach())
         self.expert_usage_counts.copy_(expert_usage.detach())
-        
+
         # Store in registry (training only — avoids leaving graph-detached eval
         # tensors in the global registry that the loss collector could pick up).
         if self.training:
             _registry_set(self, load_balance_loss)
-        
+
         return load_balance_loss
 
     def get_gflops(self, input_shape):
@@ -640,9 +640,9 @@ class OptimizedMOE(nn.Module):
 
         self._init_weights()
         self.moe_loss_fn = MoELoss(
-            balance_loss_coeff=balance_loss_coeff, 
-            z_loss_coeff=z_loss_coeff, 
-            num_experts=num_experts, 
+            balance_loss_coeff=balance_loss_coeff,
+            z_loss_coeff=z_loss_coeff,
+            num_experts=num_experts,
             top_k=top_k
         )
         self.last_routing_snapshot = {}
@@ -855,13 +855,13 @@ class OptimizedMOEImproved(nn.Module):
 
         self._init_weights()
         self.moe_loss_fn = MoELoss(
-            balance_loss_coeff=balance_loss_coeff, 
-            z_loss_coeff=router_z_loss_coeff, 
-            num_experts=num_experts, 
+            balance_loss_coeff=balance_loss_coeff,
+            z_loss_coeff=router_z_loss_coeff,
+            num_experts=num_experts,
             top_k=top_k
         )
         self.last_routing_snapshot = {}
-        
+
         # Expert dropout: periodically disable experts to prevent uniform routing
         self.expert_dropout_rate = 0.15  # 15% dropout during training
         self.dropout_interval = 100  # Apply every 100 steps
@@ -901,7 +901,7 @@ class OptimizedMOEImproved(nn.Module):
         if self.training and self.progressive_sparsity:
             self._update_sparsity()
             self._training_step += 1
-            
+
         # Use current_top_k for routing
         adaptive_top_k = self._current_top_k if self.training and self.progressive_sparsity else self.top_k
 
@@ -922,11 +922,6 @@ class OptimizedMOEImproved(nn.Module):
         # Only after warmup so it doesn't fight progressive-sparsity scheduling.
         active_experts = list(range(self.num_experts))
         _step = self._training_step
-        ddp_active = (
-            torch.distributed.is_available()
-            and torch.distributed.is_initialized()
-            and torch.distributed.get_world_size() > 1
-        )
         if self.training and _step >= self.warmup_steps and _step % self.dropout_interval == 0:
             num_drop = max(1, int(self.num_experts * self.expert_dropout_rate))
             # Draw the drop set on a fixed-seed generator keyed by the global
@@ -978,7 +973,7 @@ class OptimizedMOEImproved(nn.Module):
         expert_output = expert_output.clamp_(-1e4, 1e4)
 
         final_output = shared_out + expert_output
-        
+
         # Add residual connection if dimensions match (skipped when the outer
         # block owns the residual, see add_residual)
         if self.add_residual and self.in_channels == self.out_channels:

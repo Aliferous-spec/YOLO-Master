@@ -53,7 +53,7 @@ class WeightVerifyReport:
     def summary(self) -> str:
         """Return a human-readable summary."""
         lines = [
-            f"MoE Weight Verification Report",
+            "MoE Weight Verification Report",
             f"  Total keys: {self.total_keys}",
             f"  Matched: {self.matched_keys}/{self.total_keys}",
             f"  MoE keys checked: {self.moe_keys_checked}",

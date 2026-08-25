@@ -118,7 +118,7 @@ def save_trainer_args_yaml(save_dir: Path, args) -> None:
 
 def _hierarchical_hook(storage, key, module, inputs, output):
     """Module-level forward hook for hierarchical distillation feature caching.
-    
+
     Uses a plain function (not a closure) to ensure hooks are picklable when
     saving model checkpoints. Bound via functools.partial in trainer.
     """
@@ -630,7 +630,7 @@ class BaseTrainer:
                     self.teacher_model = None
             else:
                 LOGGER.info("[LoRA] Few-shot mode without teacher — using DropConnect + adaptive rank only")
-            
+
             # v3: Initialize EMA teacher for progressive self-distillation
             if getattr(self.args, 'lora_few_shot_use_ema_teacher', False):
                 try:
@@ -646,7 +646,7 @@ class BaseTrainer:
                     self.teacher_ema = None
             else:
                 self.teacher_ema = None
-            
+
             # v3: Initialize hierarchical distillation hook cache
             if getattr(self.args, 'lora_few_shot_hierarchical_distill', False):
                 self._init_hierarchical_distill_cache()
@@ -722,7 +722,7 @@ class BaseTrainer:
         # Scheduler
         self._setup_scheduler()
         self.stopper, self.stop = EarlyStopping(patience=self.args.patience), False
-        
+
         # ── LoRA Training Strategy Engine ──
         self.lora_strategy = None
         if is_lora:
@@ -747,7 +747,7 @@ class BaseTrainer:
                     # Otherwise `scheduler.step()` will raise ValueError in zip(strict=True).
                     if n_after != n_before:
                         self._setup_scheduler()
-                
+
                 # Strategy 2: Alpha warmup preparation
                 lora_alpha_warmup = getattr(self.args, 'lora_alpha_warmup', 0)
                 if lora_alpha_warmup > 0:
@@ -757,16 +757,16 @@ class BaseTrainer:
                         LOGGER.info("[LoRA] Alpha warmup skipped: active adapter type has no LoRA alpha layers.")
                         lora_alpha_warmup = 0
                         self.args.lora_alpha_warmup = 0
-                
+
                 # Strategy 4: Dynamic dropout scheduling params
                 self.lora_dropout_end = getattr(self.args, 'lora_dropout_end', 0.15)
                 self.lora_dropout_start_ratio = getattr(self.args, 'lora_dropout_start_ratio', 0.3)
-                
+
                 # Strategy 3: Orthogonal regularization weight
                 self.lora_ortho_weight = getattr(self.args, 'lora_ortho_weight', 0.0)
                 self.lora_ortho_frequency = getattr(self.args, 'lora_ortho_frequency', 10)
                 self.lora_ortho_batch_counter = 0  # Batch counter for orthogonal loss computation
-                
+
                 LOGGER.info(
                     f"[LoRA] 🎯 Training Strategy Engine initialized | "
                     f"layer_decay={lora_layer_decay}, "
@@ -775,7 +775,7 @@ class BaseTrainer:
                     f"ortho_freq={self.lora_ortho_frequency}, "
                     f"dropout_schedule=[0→{self.lora_dropout_end}]"
                 )
-        
+
         self.resume_training(ckpt)
         self.scheduler.last_epoch = self.start_epoch - 1  # do not move
         self.run_callbacks("on_pretrain_routine_end")
@@ -914,7 +914,7 @@ class BaseTrainer:
                     LOGGER.debug(f"[LoRA] Alpha warmup: epoch={epoch}, scale={scale:.4f}")
                 elif alpha_warmup_ep > 0 and epoch == alpha_warmup_ep:
                     self.lora_strategy.finalize_alpha_warmup()
-                
+
                 # Strategy 4: Dynamic dropout schedule
                 self.lora_strategy.update_dropout_schedule(
                     self.model, epoch=epoch, epochs_total=self.epochs,
@@ -977,7 +977,7 @@ class BaseTrainer:
                         loss, self.loss_items = unwrap_model(self.model).loss(batch, preds)
                     else:
                         loss, self.loss_items = self.model(batch)
-                    
+
                     # ── LoRA Orthogonal Regularization (Strategy 3) ──
                     # Optimized: compute every N batches instead of every batch.
                     # P1 FIX: cast ortho_loss to the main `loss` dtype before
@@ -993,7 +993,7 @@ class BaseTrainer:
                             if ortho_loss.dtype != loss.dtype:
                                 ortho_loss = ortho_loss.to(loss.dtype)
                             loss = loss + ortho_loss
-                    
+
                     # ── Few-Shot LoRA: Knowledge Distillation Loss ──
                     if getattr(self.args, 'lora_few_shot_mode', False) and hasattr(self, 'teacher_model') and self.teacher_model is not None:
                         # v3: Dynamic distillation weight scheduling
@@ -1001,7 +1001,7 @@ class BaseTrainer:
                         distill_schedule = getattr(self.args, 'lora_few_shot_distill_schedule', 'constant')
                         distill_max = getattr(self.args, 'lora_few_shot_distill_weight_max', 1.0)
                         distill_min = getattr(self.args, 'lora_few_shot_distill_weight_min', 0.1)
-                        
+
                         if distill_schedule == 'constant':
                             distill_weight = distill_max
                         elif distill_schedule == 'linear':
@@ -1013,38 +1013,38 @@ class BaseTrainer:
                         else:
                             distill_weight = distill_max
                         distill_weight = max(distill_min, min(distill_max, distill_weight))
-                        
+
                         hierarchical_distill = getattr(self.args, 'lora_few_shot_hierarchical_distill', False)
                         distill_layers = getattr(self.args, 'lora_few_shot_distill_layers', None)
                         adaptive_temp = getattr(self.args, 'lora_few_shot_adaptive_temperature', False)
                         use_ema = getattr(self.args, 'lora_few_shot_use_ema_teacher', False)
                         response_distill = getattr(self.args, 'lora_few_shot_response_distill', False)
                         response_weight = getattr(self.args, 'lora_few_shot_response_distill_weight', 0.3)
-                        
+
                         # v3: Select teacher source (static or EMA)
                         teacher_source = self.teacher_ema if (use_ema and hasattr(self, 'teacher_ema') and self.teacher_ema is not None) else self.teacher_model
-                        
+
                         student_preds = self.model(batch["img"])
                         with torch.no_grad():
                             teacher_preds = teacher_source(batch["img"])
-                        
+
                         # Compute distillation loss
                         distill_loss = self._compute_distillation_loss(student_preds, teacher_preds, adaptive_temp=adaptive_temp)
-                        
+
                         # v3: Response distillation (detection head alignment)
                         if response_distill:
                             resp_loss = self._compute_response_distillation_loss(student_preds, teacher_preds)
                             distill_loss = distill_loss + response_weight * resp_loss
-                        
+
                         # Hierarchical distillation: intermediate layer alignment
                         if hierarchical_distill and distill_layers:
                             layer_loss = self._compute_hierarchical_distillation_loss(
                                 batch["img"], distill_layers
                             )
                             distill_loss = distill_loss + 0.3 * layer_loss
-                        
+
                         loss = loss + distill_weight * distill_loss
-                    
+
                     # ── Few-Shot LoRA: Variational Rank KL Regularization ──
                     if getattr(self.args, 'lora_few_shot_mode', False) and getattr(self.args, 'lora_few_shot_variational_rank', False):
                         from ultralytics.utils.lora import FewShotLoRAConv
@@ -1063,7 +1063,7 @@ class BaseTrainer:
                                 num_modules += 1
                         if num_modules > 0:
                             loss = loss + 0.01 * (kl_loss / num_modules)
-                    
+
                     self.loss = loss.sum()
                     if RANK != -1:
                         self.loss *= self.world_size
@@ -1092,14 +1092,14 @@ class BaseTrainer:
                             )
                     else:
                         self._lora_zero_loss_streak = 0
-                
+
                 # ── Few-Shot LoRA: Update gradient importance after backward ──
                 if getattr(self.args, 'lora_few_shot_mode', False) and getattr(self.args, 'lora_few_shot_gradient_importance_weighted', False):
                     from ultralytics.utils.lora import FewShotLoRAConv
                     for module in self.model.modules():
                         if isinstance(module, FewShotLoRAConv) and module.gradient_importance_weighted:
                             module._update_importance()
-                
+
                 if should_step:
                     self.optimizer_step()
                     last_opt_step = ni
@@ -1147,7 +1147,7 @@ class BaseTrainer:
                         f"|A|_F={lora_stats['norm_A_frobenius']:.4f}, "
                         f"|B|_F={lora_stats['norm_B_frobenius']:.4f}"
                     )
-            
+
             # ── Few-Shot LoRA Stats ──
             if getattr(self.args, 'lora_few_shot_mode', False) and RANK in {-1, 0} and (epoch % 5 == 0 or epoch == self.epochs - 1):
                 from ultralytics.utils.lora import FewShotLoRAConv
@@ -1337,7 +1337,7 @@ class BaseTrainer:
         self.last.write_bytes(serialized_ckpt)  # save last.pt
         if self.best_fitness == self.fitness:
             self.best.write_bytes(serialized_ckpt)  # save best.pt
-        
+
         # Save LoRA adapters if enabled
         lora_model = unwrap_model(self.model)
         if getattr(lora_model, "lora_enabled", False) and getattr(self.args, 'lora_save_adapters', True):
@@ -1345,7 +1345,7 @@ class BaseTrainer:
             if self.best_fitness == self.fitness:
                 best_adapter_dir = self.wdir / (getattr(self.args, 'lora_adapter_dir', 'lora_adapter') + "_best")
                 save_lora_adapters(lora_model, best_adapter_dir)
-            
+
             if (self.save_period > 0) and (self.epoch % self.save_period == 0):
                 save_lora_adapters(lora_model, adapter_dir)
 
@@ -1415,7 +1415,7 @@ class BaseTrainer:
         self.optimizer.zero_grad()
         if self.ema:
             self.ema.update(self.model)
-        
+
         # v3: Update EMA teacher for progressive self-distillation
         if getattr(self.args, 'lora_few_shot_mode', False) and hasattr(self, 'teacher_ema') and self.teacher_ema is not None:
             ema_decay = getattr(self, 'teacher_ema_decay', 0.999)
@@ -1430,7 +1430,7 @@ class BaseTrainer:
 
     def _compute_distillation_loss(self, student_preds, teacher_preds, adaptive_temp=False):
         """Compute knowledge distillation loss between student and teacher predictions.
-        
+
         Args:
             student_preds: Student model predictions
             teacher_preds: Teacher model predictions
@@ -1441,11 +1441,11 @@ class BaseTrainer:
             student_preds = student_preds[0] if len(student_preds) > 0 else student_preds
         if isinstance(teacher_preds, (list, tuple)):
             teacher_preds = teacher_preds[0] if len(teacher_preds) > 0 else teacher_preds
-        
+
         # Ensure we have tensors
         if not isinstance(student_preds, torch.Tensor) or not isinstance(teacher_preds, torch.Tensor):
             return torch.tensor(0.0, device=next(self.model.parameters()).device)
-        
+
         # Adaptive temperature: based on teacher prediction entropy
         if adaptive_temp:
             with torch.no_grad():
@@ -1454,7 +1454,7 @@ class BaseTrainer:
                 temperature = torch.clamp(2.0 + teacher_entropy * 4.0, 1.0, 8.0)
         else:
             temperature = 4.0
-        
+
         # Handle different spatial dimensions / formats
         # YOLO predictions can be [B, C, H, W] or [B, N, C] (flattened)
         if student_preds.dim() == 3 and teacher_preds.dim() == 3:
@@ -1465,7 +1465,7 @@ class BaseTrainer:
                 teacher_preds = teacher_preds[:, :min_len, :]
             # MSE on flattened predictions
             return torch.nn.functional.mse_loss(student_preds, teacher_preds)
-        
+
         if student_preds.dim() == 4 and teacher_preds.dim() == 4:
             # Both are [B, C, H, W] format
             if student_preds.shape != teacher_preds.shape:
@@ -1483,7 +1483,7 @@ class BaseTrainer:
             return torch.nn.functional.kl_div(
                 student_soft, teacher_soft, reduction='batchmean', log_target=False
             ) * (t ** 2)
-        
+
         # Fallback: MSE on whatever we can match
         if student_preds.shape != teacher_preds.shape:
             min_len = min(student_preds.numel(), teacher_preds.numel())
@@ -1494,44 +1494,44 @@ class BaseTrainer:
 
     def _compute_response_distillation_loss(self, student_preds, teacher_preds):
         """v3: Compute response distillation loss on detection head outputs.
-        
+
         For YOLO detection models, predictions are typically tuples/lists containing
         cls_logits and bbox predictions. This loss aligns the final detection outputs
         between student and teacher, providing task-specific distillation.
-        
+
         Args:
             student_preds: Student model predictions (can be list/tuple of tensors)
             teacher_preds: Teacher model predictions (can be list/tuple of tensors)
-            
+
         Returns:
             torch.Tensor: Response distillation loss
         """
         device = next(self.model.parameters()).device
-        
+
         # Handle various prediction formats
         if isinstance(student_preds, (list, tuple)):
             # YOLO typically returns [pred_train, pred_val] or list of scale outputs
             student_preds = [p for p in student_preds if isinstance(p, torch.Tensor)]
         else:
             student_preds = [student_preds] if isinstance(student_preds, torch.Tensor) else []
-        
+
         if isinstance(teacher_preds, (list, tuple)):
             teacher_preds = [p for p in teacher_preds if isinstance(p, torch.Tensor)]
         else:
             teacher_preds = [teacher_preds] if isinstance(teacher_preds, torch.Tensor) else []
-        
+
         if not student_preds or not teacher_preds:
             return torch.tensor(0.0, device=device)
-        
+
         total_loss = 0.0
         valid_pairs = 0
-        
+
         # Pair up predictions by matching shapes
         for s_pred in student_preds:
             for t_pred in teacher_preds:
                 if s_pred.shape != t_pred.shape:
                     continue
-                
+
                 # Detect format: [B, N, C] flattened predictions vs [B, C, H, W] feature maps
                 if s_pred.dim() == 3 and t_pred.dim() == 3:
                     # Flattened predictions: split into cls (last 80 dims) and bbox (first 4 dims)
@@ -1541,7 +1541,7 @@ class BaseTrainer:
                         s_bbox = s_pred[..., :4]
                         t_bbox = t_pred[..., :4]
                         bbox_loss = torch.nn.functional.l1_loss(s_bbox, t_bbox)
-                        
+
                         # Classification: remaining channels (skip obj for simplicity)
                         s_cls = s_pred[..., 5:]
                         t_cls = t_pred[..., 5:]
@@ -1555,19 +1555,19 @@ class BaseTrainer:
                             ) * (T ** 2)
                         else:
                             cls_loss = torch.tensor(0.0, device=device)
-                        
+
                         total_loss += (bbox_loss + cls_loss)
                         valid_pairs += 1
                     else:
                         # Generic 3D: MSE
                         total_loss += torch.nn.functional.mse_loss(s_pred, t_pred)
                         valid_pairs += 1
-                
+
                 elif s_pred.dim() == 4 and t_pred.dim() == 4:
                     # Feature map format: spatial distillation
                     total_loss += torch.nn.functional.mse_loss(s_pred, t_pred)
                     valid_pairs += 1
-        
+
         if valid_pairs > 0:
             return total_loss / valid_pairs
         return torch.tensor(0.0, device=device)
@@ -1589,10 +1589,10 @@ class BaseTrainer:
 
     def _init_hierarchical_distill_cache(self):
         """v3: Initialize persistent hook cache for hierarchical distillation.
-        
+
         Registers forward hooks once at training start and reuses them across batches,
         eliminating per-batch hook registration/removal overhead.
-        
+
         Uses a module-level hook function (not a nested closure) to allow pickling
         during model checkpoint saving.
         """
@@ -1601,10 +1601,10 @@ class BaseTrainer:
         if not distill_layers:
             self._hierarchical_cache = None
             return
-        
+
         student_model = unwrap_model(self.model)
         teacher_model = getattr(self, 'teacher_model', None)
-        
+
         # Use shared dicts attached to the trainer (not nested closures) to keep hooks picklable
         self._hierarchical_cache = {
             'student_features': {},
@@ -1613,7 +1613,7 @@ class BaseTrainer:
             'teacher_hooks': [],
             'layer_indices': list(distill_layers),
         }
-        
+
         # Register hooks using module-level function + functools.partial (picklable)
         from functools import partial
         for idx in distill_layers:
@@ -1625,20 +1625,20 @@ class BaseTrainer:
                 hook_fn = partial(_hierarchical_hook, self._hierarchical_cache['teacher_features'], idx)
                 h = teacher_model.model[idx].register_forward_hook(hook_fn)
                 self._hierarchical_cache['teacher_hooks'].append(h)
-        
+
         LOGGER.info(f"[LoRA] 📌 Hierarchical distillation hook cache initialized "
                     f"({len(self._hierarchical_cache['student_hooks'])} student + "
                     f"{len(self._hierarchical_cache['teacher_hooks'])} teacher hooks)")
 
     def _compute_hierarchical_distillation_loss(self, images, layer_indices):
         """v3: Compute hierarchical distillation loss using cached hooks.
-        
+
         Uses pre-registered hooks from _init_hierarchical_distill_cache,
         avoiding per-batch hook registration overhead.
         """
         if not layer_indices:
             return torch.tensor(0.0, device=images.device)
-        
+
         # v3: Use cached hooks if available
         if getattr(self, '_hierarchical_cache', None) is not None:
             from ultralytics.utils.torch_utils import unwrap_model
@@ -1646,16 +1646,16 @@ class BaseTrainer:
             # Clear previous features
             cache['student_features'].clear()
             cache['teacher_features'].clear()
-            
+
             student_model = unwrap_model(self.model)
             teacher_model = self.teacher_model
-            
+
             # Forward pass to populate cached features
             with torch.no_grad():
                 _ = student_model(images)
                 if teacher_model is not None:
                     _ = teacher_model(images)
-            
+
             total_loss = 0.0
             valid_layers = 0
             for idx in layer_indices:
@@ -1663,7 +1663,7 @@ class BaseTrainer:
                 t_feat = cache['teacher_features'].get(idx)
                 if s_feat is None or t_feat is None:
                     continue
-                
+
                 if s_feat.shape != t_feat.shape:
                     if s_feat.dim() == 4 and t_feat.dim() == 4:
                         t_feat = torch.nn.functional.interpolate(
@@ -1671,30 +1671,30 @@ class BaseTrainer:
                         )
                     else:
                         continue
-                
+
                 s_attention = torch.abs(s_feat).sum(dim=1, keepdim=True)
                 t_attention = torch.abs(t_feat).sum(dim=1, keepdim=True)
                 s_attention = s_attention / (s_attention.norm(2, dim=(2,3), keepdim=True) + 1e-8)
                 t_attention = t_attention / (t_attention.norm(2, dim=(2,3), keepdim=True) + 1e-8)
                 total_loss += torch.nn.functional.mse_loss(s_attention, t_attention)
                 valid_layers += 1
-            
+
             if valid_layers > 0:
                 return total_loss / valid_layers
             return torch.tensor(0.0, device=images.device)
-        
+
         # Fallback to original implementation if cache not available
         student_features = {}
         teacher_features = {}
-        
+
         def make_hook(storage, key):
             def hook(module, input, output):
                 storage[key] = output.detach() if not torch.is_grad_enabled() else output
             return hook
-        
+
         student_model = unwrap_model(self.model)
         teacher_model = self.teacher_model
-        
+
         hooks = []
         try:
             for idx in layer_indices:
@@ -1706,12 +1706,12 @@ class BaseTrainer:
                     hooks.append(teacher_model.model[idx].register_forward_hook(
                         make_hook(teacher_features, idx)
                     ))
-            
+
             with torch.no_grad():
                 _ = student_model(images)
                 if teacher_model is not None:
                     _ = teacher_model(images)
-            
+
             total_loss = 0.0
             valid_layers = 0
             for idx in layer_indices:
@@ -1731,7 +1731,7 @@ class BaseTrainer:
                     t_attention = t_attention / (t_attention.norm(2, dim=(2,3), keepdim=True) + 1e-8)
                     total_loss += torch.nn.functional.mse_loss(s_attention, t_attention)
                     valid_layers += 1
-            
+
             if valid_layers > 0:
                 return total_loss / valid_layers
             return torch.tensor(0.0, device=images.device)
@@ -1739,33 +1739,33 @@ class BaseTrainer:
             for hook in hooks:
                 hook.remove()
         """Compute hierarchical distillation loss at intermediate layers.
-        
+
         Extracts features at specified layer indices from both student and teacher
         and computes attention transfer loss.
-        
+
         Args:
             images: Input batch images
             layer_indices: List of layer indices to extract features from
-        
+
         Returns:
             torch.Tensor: Hierarchical distillation loss
         """
         if not layer_indices:
             return torch.tensor(0.0, device=images.device)
-        
+
         # Register forward hooks to extract intermediate features
         student_features = {}
         teacher_features = {}
-        
+
         def make_hook(storage, key):
             def hook(module, input, output):
                 storage[key] = output.detach() if not torch.is_grad_enabled() else output
             return hook
-        
+
         # Get student model (unwrap DDP if needed)
         student_model = unwrap_model(self.model)
         teacher_model = self.teacher_model
-        
+
         hooks = []
         try:
             # Register hooks on student layers
@@ -1778,12 +1778,12 @@ class BaseTrainer:
                     hooks.append(teacher_model.model[idx].register_forward_hook(
                         make_hook(teacher_features, idx)
                     ))
-            
+
             # Forward pass to extract features
             with torch.no_grad():
                 _ = student_model(images)
                 _ = teacher_model(images)
-            
+
             # Compute attention transfer loss for each layer pair
             total_loss = 0.0
             valid_layers = 0
@@ -1791,7 +1791,7 @@ class BaseTrainer:
                 if idx in student_features and idx in teacher_features:
                     s_feat = student_features[idx]
                     t_feat = teacher_features[idx]
-                    
+
                     # Ensure same shape
                     if s_feat.shape != t_feat.shape:
                         if s_feat.dim() == 4 and t_feat.dim() == 4:
@@ -1800,21 +1800,21 @@ class BaseTrainer:
                             )
                         else:
                             continue
-                    
+
                     # Attention transfer: convert features to attention maps
                     # Sum over channels, normalize
                     s_attention = torch.abs(s_feat).sum(dim=1, keepdim=True)
                     t_attention = torch.abs(t_feat).sum(dim=1, keepdim=True)
-                    
+
                     # Normalize
                     s_attention = s_attention / (s_attention.norm(2, dim=(2,3), keepdim=True) + 1e-8)
                     t_attention = t_attention / (t_attention.norm(2, dim=(2,3), keepdim=True) + 1e-8)
-                    
+
                     # MSE loss on attention maps
                     layer_loss = torch.nn.functional.mse_loss(s_attention, t_attention)
                     total_loss += layer_loss
                     valid_layers += 1
-            
+
             if valid_layers > 0:
                 return total_loss / valid_layers
             return torch.tensor(0.0, device=images.device)
@@ -2109,7 +2109,7 @@ class BaseTrainer:
         # LoRA-aware parameter group separation
         lora_lr_mult = getattr(self.args, "lora_lr_mult", 1.0)
         has_lora_param = any(_is_adapter_param(n) for n, _ in model.named_parameters())
-        
+
         g = [], [], [], [], []  # 5 groups: [base_wt, bn_wt, bias, router, lora]
         bn = tuple(v for k, v in nn.__dict__.items() if "Norm" in k)  # normalization layers, i.e. BatchNorm2d()
         if name == "auto":
@@ -2158,7 +2158,7 @@ class BaseTrainer:
         moe_router_lr_scale = getattr(self.args, 'moe_router_lr_scale', 0.5)
         router_lr = lr * moe_router_lr_scale
         optimizer.add_param_group({"params": g[3], "weight_decay": decay, "lr": router_lr, "initial_lr": router_lr})  # add g3 (MoE Router)
-        
+
         # Add LoRA parameter group with configurable LR multiplier
         lora_log = ""
         if g[4]:
@@ -2172,7 +2172,7 @@ class BaseTrainer:
             lora_log = f", {len(g[4])} LoRA(lr={lora_lr:.6f}, mult={lora_lr_mult})"
         elif has_lora_param and lora_lr_mult != 1.0:
             lora_log = " [WARN] lora_lr_mult set but no LoRA params found"
-            
+
         LOGGER.info(
             f"{colorstr('optimizer:')} {type(optimizer).__name__}(lr={lr}, momentum={momentum}) with parameter groups "
             f"{len(g[1])} bn(decay=0), {len(g[0])} wt(decay={decay}), {len(g[2])} bias(decay=0), "

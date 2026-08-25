@@ -14,7 +14,7 @@ import re
 
 from ultralytics.utils import LOGGER
 from ultralytics.nn.tasks import (
-    DetectionModel, SegmentationModel, PoseModel, ClassificationModel, 
+    DetectionModel, SegmentationModel, PoseModel, ClassificationModel,
     OBBModel, RTDETRDetectionModel, WorldModel
 )
 
@@ -29,9 +29,9 @@ try:
 except ImportError:
     LoraConfig = LoHaConfig = LoKrConfig = AdaLoraConfig = None
     IA3Config = OFTConfig = BOFTConfig = HRAConfig = None
-    get_peft_model = PeftModel = None
+    get_peft_model = None
     PEFT_AVAILABLE = False
-    
+
     # Define a dummy class to pass type checks when PEFT is missing
     class PeftModel:
         """Dummy class to prevent import errors when peft is not installed."""
@@ -101,13 +101,13 @@ def _compute_param_stats(model: nn.Module) -> ParamStats:
 
 def _unfreeze_detection_head(model: nn.Module) -> int:
     """Unfreeze only real detection-head parameters for adapter fine-tuning.
-    
+
     RT-DETR uses RTDETRDecoder with parameter names like decoder.layers, dec_score_head,
-    dec_bbox_head, enc_score_head, enc_bbox_head, input_proj, query_pos_head, 
+    dec_bbox_head, enc_score_head, enc_bbox_head, input_proj, query_pos_head,
     denoising_class_embed, enc_output — none of which match the YOLO keywords.
     If the head stays frozen during LoRA training, mAP will be zero because the model
     cannot learn class/box predictions for the new dataset.
-    
+
     Returns count of unfrozen params.
     """
     try:
@@ -154,18 +154,18 @@ def _is_rtdetr_like_model(model: nn.Module) -> bool:
 def _fast_parse_int_list(value: Any) -> Optional[List[int]]:
     """
     High-performance integer list parser.
-    
+
     Args:
         value: Input string, number, or list/tuple.
-        
+
     Returns:
         Optional[List[int]]: Parsed list of integers, or None if invalid.
     """
-    if value is None: 
+    if value is None:
         return None
-    if isinstance(value, (list, tuple)): 
+    if isinstance(value, (list, tuple)):
         return [int(x) for x in value]
-    if isinstance(value, (int, float)): 
+    if isinstance(value, (int, float)):
         return [int(value)]
     if isinstance(value, str):
         # Parse only if the string contains digits
@@ -176,14 +176,14 @@ def _fast_parse_int_list(value: Any) -> Optional[List[int]]:
 def _fast_parse_str_list(value: Any) -> Optional[List[str]]:
     """
     High-performance string list parser with automatic deduplication and trimming.
-    
+
     Args:
         value: Input string or list/tuple.
-        
+
     Returns:
         Optional[List[str]]: Cleaned list of strings.
     """
-    if value is None: 
+    if value is None:
         return None
     if isinstance(value, str):
         # Remove brackets and split
@@ -447,8 +447,8 @@ def load_lora_compatible_state_dict(
 
 
 
-from .config import LoRAConfig, LoRAConfigBuilder
-from .fallback import (
+from .config import LoRAConfig, LoRAConfigBuilder  # noqa: E402
+from .fallback import (  # noqa: E402
     FewShotLoRAConv,
     LoRADetectionModel,
     ManualLoRAConv,
@@ -583,7 +583,7 @@ def apply_lora(
         **kwargs: Configuration override dictionary.
 
     Returns:
-        DetectionModel: The modified model instance with LoRA enabled 
+        DetectionModel: The modified model instance with LoRA enabled
                         (class swapped to LoRADetectionModel).
     """
     # 0. Prevent Re-application
@@ -721,10 +721,10 @@ def apply_lora(
             has_area_attn = True
         if has_moe and has_attn and has_area_attn:
             break
-    
+
     if config.include_moe and not has_moe:
         config.include_moe = False
-    
+
     if config.include_attention and not has_attn:
         config.include_attention = False
 
@@ -768,27 +768,27 @@ def apply_lora(
 
     # 3. Logging
     LOGGER.info("-" * 60)
-    LOGGER.info(f"🚀 Initializing LoRA Strategy")
+    LOGGER.info("🚀 Initializing LoRA Strategy")
     for k, v in config.__dict__.items():
         if k not in ['target_modules', 'exclude_modules'] and v is not None:
             LOGGER.info(f"  - {k:<22}: {v}")
-    
+
     # 4. Prepare Builder Parameters
     # CRITICAL FIX: If target_modules is explicitly provided (e.g. ['conv']), we MUST still run it through
     # auto_detect_targets to filter out incompatible layers (like grouped convs).
     # Otherwise, PEFT will try to apply LoRA to ALL layers matching 'conv', causing crashes.
-    
+
     # If target_modules is provided, we treat it as a broad filter for auto_detect
     # forcing auto_detect to only consider layers containing these strings/types
-    
+
     # However, auto_detect_targets logic is: if target_modules is None, it scans everything.
     # If we pass target_modules to it, it doesn't currently use it as a base filter.
     # So we should modify how we call it.
-    
+
     # Actually, let's look at create_config. It calls auto_detect_targets ONLY IF target_modules is None.
     # We need to change this behavior. We want auto_detect_targets to ALWAYS run validation/filtering,
     # even if the user provided a list.
-    
+
     builder_params = {
         "r": config.r,
         "alpha": config.alpha,
@@ -850,19 +850,19 @@ def apply_lora(
          if isinstance(module, nn.Conv2d) and module.groups > 1:
               if config.r > 0 and config.r % module.groups != 0:
                    incompatible_layers.append(name)
-    
+
     if incompatible_layers:
          current_exclude = builder_params.get("exclude_modules") or []
          if isinstance(current_exclude, str):
               current_exclude = [current_exclude] # Should be handled by parser but just in case
-         
+
          # Add variations to ensure PEFT catches it regardless of prefixing
          variations = []
          for name in incompatible_layers:
              variations.append(name)
              variations.append(f"model.{name}")
              variations.append(f"model.model.{name}")
-         
+
          # Avoid duplicates
          final_exclude = list(set(current_exclude + variations))
          builder_params["exclude_modules"] = final_exclude
@@ -876,19 +876,19 @@ def apply_lora(
             try:
                 from transformers import BitsAndBytesConfig
                 LOGGER.warning("[LoRA] QLoRA (4-bit/8-bit) for YOLO Conv2d layers is experimental and depends on bitsandbytes support.")
-                pass 
+                pass
             except ImportError:
                 LOGGER.warning("[LoRA] transformers not found. BitsAndBytesConfig skipped.")
 
         # Create config using model.model (nn.Sequential)
-        
+
         # 5.1. Target Module Intersection Logic
         # We need to refine 'target_modules' in builder_params.
         # If the user provided explicit targets (e.g. ['conv']), we must still run auto-detect
         # to filter out incompatible layers (grouped convs).
-        
+
         user_targets = builder_params.get("target_modules")
-        
+
         # Temporarily remove targets to let auto-detect scan everything for validity
         detect_params = builder_params.copy()
         if "target_modules" in detect_params:
@@ -903,7 +903,7 @@ def apply_lora(
 
         # Run auto-detect to get ALL structurally valid layers
         valid_targets = LoRAConfigBuilder.auto_detect_targets(model.model, **detect_params)
-        
+
         final_targets = []
         if user_targets:
             final_targets = _filter_target_modules(valid_targets, user_targets)
@@ -912,7 +912,7 @@ def apply_lora(
         else:
             # No user preference, use all valid layers
             final_targets = valid_targets
-            
+
         if final_targets:
             builder_params["target_modules"] = final_targets
         else:
@@ -928,14 +928,14 @@ def apply_lora(
             rank=config.r,
         )
         _log_lora_target_audit(target_audit)
-        
+
         # DEBUG: Print final targets passed to PEFT
         LOGGER.info(f"[LoRA] Final Targets Passed to PEFT (List Length: {len(final_targets) if final_targets else 0})")
-        
+
         # Remove debug logs about regex
-        
+
         peft_config = LoRAConfigBuilder.create_config(model.model, **builder_params)
-        
+
         if peft_config is None:
             LOGGER.warning("[LoRA] ⚠️ No valid target modules found based on filters. LoRA skipped.")
             return model
@@ -947,7 +947,7 @@ def apply_lora(
         # [CORE MAGIC] Swap PeftModel class with PeftProxy
         # This makes the wrapper behave exactly like nn.Sequential (supports indexing, slicing, etc.)
         peft_model_wrapper.__class__ = PeftProxy
-        
+
         # Replace the internal structure of the original model
         model.model = peft_model_wrapper
 
@@ -977,7 +977,7 @@ def apply_lora(
         )
 
         _validate_lora_runtime_model(model, expected_targets=final_targets, context="PEFT apply_lora")
-        
+
         LOGGER.info(f"[LoRA] ✅ Successfully applied to {len(final_targets)} modules.")
         if final_targets:
              LOGGER.info(f"[LoRA] Targets sample: {list(final_targets)[:10]}")
@@ -1022,7 +1022,7 @@ def apply_lora(
     # 6. Gradient Checkpointing (VRAM Optimization) - Actually activate
     if config.gradient_checkpointing:
         from torch.utils.checkpoint import checkpoint
-        
+
         # Enable the flag on the model for tasks.py to consume
         if hasattr(model, "model"):
             model.model.use_gradient_checkpointing = True
@@ -1030,7 +1030,7 @@ def apply_lora(
                 model.model.model.use_gradient_checkpointing = True
                 # Patch C3k2 / Conv layers to use checkpointing if they support it
                 _activate_gradient_checkpointing(model.model.model)
-        
+
         # Set directly on the top-level model (LoRADetectionModel)
         model.use_gradient_checkpointing = True
         LOGGER.info("[LoRA] ✅ Gradient checkpointing activated (reduces VRAM by ~30-50%).")
@@ -1044,7 +1044,7 @@ def apply_lora(
                 break
     except Exception:
         pass
-    
+
     if device_type == 'mps':
         LOGGER.info("[LoRA] ⚡ MPS backend detected. LoRA inference will use Metal acceleration.")
         LOGGER.info("[LoRA]   Tip: Use lora_r=4~16 on MPS to avoid OOM. Larger ranks increase memory linearly.")
@@ -1090,15 +1090,15 @@ def _warn_slow_peft_variant(peft_type: str):
 def _activate_gradient_checkpointing(module: nn.Module):
     """Recursively enable gradient checkpointing for supported modules."""
     from torch.utils.checkpoint import checkpoint_sequential
-    
+
     for name, child in module.named_children():
         # For C3k2-like blocks, we can wrap their forward with checkpoint
         child_name = type(child).__name__.lower()
-        
+
         if any(kw in child_name for kw in ('c3k', 'c2f', 'bottleneck', 'conv', 'block')):
             if not getattr(child, 'use_gradient_checkpointing', False):
                 child.use_gradient_checkpointing = True
-        
+
         # Recurse into children
         if len(list(child.children())) > 0:
             _activate_gradient_checkpointing(child)
@@ -1112,15 +1112,15 @@ def _get_mps_memory() -> tuple:
     """Get precise MPS memory info using system calls."""
     if not hasattr(torch, 'mps') or not torch.backends.mps.is_available():
         return None, None
-    
+
     try:
         import subprocess
         result = subprocess.run(
             ['vm_stat'], capture_output=True, text=True, timeout=5
         )
-        
+
         page_size = 4096  # macOS page size
-        
+
         # Parse "Pages active"
         for line in result.stdout.split('\n'):
             if 'Pages active:' in line:
@@ -1130,14 +1130,14 @@ def _get_mps_memory() -> tuple:
                     return val * page_size, None
     except Exception:
         pass
-    
+
     try:
         import psutil
         vm = psutil.virtual_memory()
         return vm.used, vm.total
     except Exception:
         pass
-    
+
     return None, None
 
 
@@ -1210,8 +1210,8 @@ def get_lora_param_groups(
 
 
 
-from .io import load_lora_adapters, merge_lora_weights, save_lora_adapters
-from .planner import (
+from .io import load_lora_adapters, merge_lora_weights, save_lora_adapters  # noqa: E402
+from .planner import (  # noqa: E402
     ArchitectureFingerprint,
     PEFTPlanner,
     PEFTVariantProfile,
@@ -1219,7 +1219,7 @@ from .planner import (
     RefusalError,
     is_planner_enabled,
 )
-from .training import LoraTrainingStrategy, get_lora_training_stats, suggest_lora_config_for_dataset
+from .training import LoraTrainingStrategy, get_lora_training_stats, suggest_lora_config_for_dataset  # noqa: E402
 
 __all__ = [
     "PEFT_AVAILABLE",

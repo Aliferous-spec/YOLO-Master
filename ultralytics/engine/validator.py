@@ -53,10 +53,6 @@ def convert_ndjson_to_yolo_if_needed(data):
     if str(data).rsplit(".", 1)[-1] != "ndjson":
         return data
 
-    import asyncio
-
-    from ultralytics.data.converter import convert_ndjson_to_yolo
-
     return str(asyncio.run(convert_ndjson_to_yolo(data)))
 
 

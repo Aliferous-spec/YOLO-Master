@@ -46,7 +46,7 @@ def _validate_router_input(x: torch.Tensor, expected_channels: int, context: str
         )
     if torch.isnan(x).any() or torch.isinf(x).any():
         raise MoERouterError(
-            f"Router input contains NaN/Inf values"
+            "Router input contains NaN/Inf values"
             + (f" [{context}]" if context else "")
         )
 
@@ -125,9 +125,9 @@ class UltraEfficientRouter(nn.Module):
         # 6) Softmax + TopK (fused operation)
         weights = F.softmax(scaled_logits.float(), dim=1).type_as(x)
         pooled_weights = weights.mean(dim=[2, 3], keepdim=True)
-        
+
         topk_vals, topk_indices = torch.topk(pooled_weights, current_top_k, dim=1)
-        
+
         # In-place normalization
         topk_vals.div_(topk_vals.sum(dim=1, keepdim=True).add_(1e-6))
 
@@ -173,7 +173,6 @@ class BaseRouter(nn.Module):
                         top_k: Optional[int] = None) -> Tuple[
         torch.Tensor, torch.Tensor, Dict]:
         """Unified logic to process logits into Top-K selection."""
-        B = logits.shape[0]
         effective_top_k = self.top_k if top_k is None else max(1, min(int(top_k), self.num_experts))
 
         # Guard: detect NaN/Inf in logits early (catches upstream corruption)
@@ -427,7 +426,7 @@ class DynamicRoutingLayer(nn.Module):
         # Apply mask and re-normalize
         weights = weights * mask_one_hot
         weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
-        
+
         return weights.view(B, E, H, W)
 
     def _hard_top_k(self, logits):

@@ -35,15 +35,15 @@ def autocast(enabled=True, **kwargs):
     # On CPU, autocast is not fully supported; disable to avoid warnings/errors
     from contextlib import nullcontext
     return nullcontext() if not enabled else nullcontext()
-from .loss import MoELoss, gshard_balance_loss, weighted_gshard_balance_loss, differentiable_balance_loss, all_reduce_mean
-from .scheduler import MoEDynamicScheduler, MoEDynamicSchedulerConfig
+from .loss import MoELoss, gshard_balance_loss, weighted_gshard_balance_loss, differentiable_balance_loss, all_reduce_mean  # noqa: E402
+from .scheduler import MoEDynamicScheduler, MoEDynamicSchedulerConfig  # noqa: E402
 
 # Global registry to store auxiliary losses for MoE modules
 # This prevents storing non-leaf tensors in the module instance, avoiding deepcopy errors.
 # Guarded by a lock: WeakKeyDictionary mutation is not atomic, and concurrent
 # forward passes (e.g. multi-threaded eval / hook callbacks) could otherwise
 # corrupt its internal weakref bookkeeping.
-import threading as _threading
+import threading as _threading  # noqa: E402
 
 MOE_LOSS_REGISTRY = weakref.WeakKeyDictionary()
 _MOE_LOSS_REGISTRY_LOCK = _threading.Lock()

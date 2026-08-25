@@ -300,7 +300,7 @@ class ExpertUsageTracker:
             data_matrix.append(layer_data)
 
             # Statistical summary
-            LOGGER.info(f"\n📈 Summary:")
+            LOGGER.info("\n📈 Summary:")
             LOGGER.info(f"   • Total Experts: {num_experts}")
             LOGGER.info(f"   • Ideal Share: {ideal_share:.2f}%")
             LOGGER.info(f"   • Total Hits: {int(total_hits):,}")
@@ -447,7 +447,7 @@ def diagnose_model(
     # Local import to avoid circular dependency
     from ultralytics import YOLO
 
-    LOGGER.info(f"\n🚀 Starting Model Diagnosis")
+    LOGGER.info("\n🚀 Starting Model Diagnosis")
     LOGGER.info(f"📁 Model: {model_path}")
     LOGGER.info(f"📊 Dataset: {dataset}")
 

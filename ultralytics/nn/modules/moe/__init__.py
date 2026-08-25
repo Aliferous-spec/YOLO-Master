@@ -90,6 +90,7 @@ from .scheduler import (
 STABLE_MOE_CLASSES = frozenset({
     "UltraOptimizedMoE",
     "ES_MOE",
+    "HybridAdaptiveGateMoE",
     "AdaptiveGateMoE",
     "OptimalHybridGateMoE",
     "UltimateOptimizedMoE",
@@ -107,7 +108,6 @@ EXPERIMENTAL_MOE_CLASSES = frozenset({
     "HyperFusedMoE",
     "HyperUltimateMoE",
     "FusedAdaptiveGateMoE",
-    "HybridAdaptiveGateMoE",
     "HybridAdaptiveGateMoEv2",
     "MultiHeadRouterMoE",
     "DiversifiedExpertMoE",

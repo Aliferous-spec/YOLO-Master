@@ -86,7 +86,7 @@ def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
 # Helpers
 # ---------------------------------------------------------------------------
 
-from ultralytics.nn.modules.moe.utils import get_safe_groups as _safe_groups
+from ultralytics.nn.modules.moe.utils import get_safe_groups as _safe_groups  # noqa: E402
 
 
 def _flash_attn(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
@@ -661,9 +661,9 @@ class C2fMoA(nn.Module):
         aux_total = x.new_zeros(())
         for m in self.m:
             y.append(m(y[-1]))
-            l = m.last_aux_loss
-            if isinstance(l, torch.Tensor):
-                aux_total = aux_total + l
+            aux = m.last_aux_loss
+            if isinstance(aux, torch.Tensor):
+                aux_total = aux_total + aux
         self.last_aux_loss = aux_total
 
         # ── Routing snapshot (aggregated from child MoABlocks) ──────────
@@ -873,18 +873,18 @@ def collect_moa_aux_loss(model: nn.Module) -> torch.Tensor:
     covered: set[int] = set()
     for m in model.modules():
         if isinstance(m, C2fMoA):
-            l = m.last_aux_loss
-            if isinstance(l, torch.Tensor) and l.requires_grad:
-                total = l if total is None else total + l
+            aux = m.last_aux_loss
+            if isinstance(aux, torch.Tensor) and aux.requires_grad:
+                total = aux if total is None else total + aux
             covered.update(id(child) for child in m.modules())
         elif isinstance(m, NeckMoAFusion):
-            l = m.last_aux_loss
-            if isinstance(l, torch.Tensor) and l.requires_grad:
-                total = l if total is None else total + l
+            aux = m.last_aux_loss
+            if isinstance(aux, torch.Tensor) and aux.requires_grad:
+                total = aux if total is None else total + aux
         elif isinstance(m, MoABlock) and id(m) not in covered:
-            l = m.last_aux_loss
-            if isinstance(l, torch.Tensor) and l.requires_grad:
-                total = l if total is None else total + l
+            aux = m.last_aux_loss
+            if isinstance(aux, torch.Tensor) and aux.requires_grad:
+                total = aux if total is None else total + aux
     return total if total is not None else torch.zeros(1, device=_aux_loss_device(model))
 
 

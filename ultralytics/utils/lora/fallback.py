@@ -2,7 +2,7 @@
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,8 @@ from .api import (
     build_lora_target_audit,
     resolve_effective_lora_request,
 )
+if TYPE_CHECKING:
+    from .config import LoRAConfig
 
 class FewShotLoRAConv(nn.Module):
     """LoRA wrapper optimized for few-shot learning.
@@ -119,7 +121,7 @@ class FewShotLoRAConv(nn.Module):
 
     def _update_importance(self):
         """Update Fisher-information importance EMA for GIW-DC.
-        
+
         NOTE: This must be called AFTER backward() but BEFORE optimizer step,
         when gradients are still available.
         """
@@ -195,13 +197,13 @@ class FewShotLoRAConv(nn.Module):
         out = self.conv(x)
 
         k_h, k_w = self.conv.kernel_size
-        
+
         # ── v3: 1x1 conv short-circuit ──
         # For 1x1 conv with zero padding, unfold is equivalent to reshape
         # This avoids expensive memory allocation for ~40% of YOLO conv layers
         is_1x1 = (k_h == 1 and k_w == 1)
         no_pad = (self.conv.padding == (0, 0) or self.conv.padding == 0)
-        
+
         if is_1x1 and no_pad:
             # x: (B, C_in, H, W) -> (B, C_in, H*W)
             B_size, C_in, H, W = x.shape
@@ -490,7 +492,7 @@ def _replace_conv_with_manual_lora(module: nn.Module, config: "LoRAConfig", pref
     Grouped convolutions are now supported when `r % groups == 0`. Depthwise
     convs (where groups == in_channels == out_channels) are still gated by
     `config.allow_depthwise` to match the PEFT backend behavior.
-    
+
     v3: Supports layer-wise adaptive rank when few_shot_layerwise_rank=True.
     """
     replaced = 0
@@ -507,7 +509,7 @@ def _replace_conv_with_manual_lora(module: nn.Module, config: "LoRAConfig", pref
             r = base_r
             if layerwise_rank:
                 r = _compute_layer_rank(child, base_r, full_name)
-            
+
             # Grouped conv compatibility: rank must be divisible by groups.
             if groups > 1:
                 if r > 0 and (r % groups != 0):
@@ -777,7 +779,6 @@ def _merge_manual_lora_conv(module) -> nn.Conv2d:
     # Per-group delta: (out_per_group, in_per_group * kH * kW)
     delta_per_group = torch.bmm(lora_B, lora_A.transpose(1, 2))
     # Reshape into Conv2d weight layout: (out_channels, in_channels/groups, kH, kW)
-    out_per_group = conv.out_channels // max(groups, 1)
     in_per_group = conv.in_channels // max(groups, 1)
     weight_delta = delta_per_group.reshape(
         conv.out_channels, in_per_group, *conv.kernel_size
@@ -832,11 +833,11 @@ class PeftProxy(PeftModel):
     """
     Advanced PEFT Proxy Wrapper.
 
-    This class bridges the gap between PEFT's arbitrary model structure and 
+    This class bridges the gap between PEFT's arbitrary model structure and
     Ultralytics' strict expectation of `nn.Sequential` behavior.
 
     Key Optimizations:
-    1. **Sequential Emulation**: intercepts `__getitem__`, `__iter__`, and `__len__` to 
+    1. **Sequential Emulation**: intercepts `__getitem__`, `__iter__`, and `__len__` to
        ensure the model behaves like a list of layers (crucial for YOLO).
     2. **Performance Passthrough**: Explicitly implements `forward` to bypass `__getattr__` overhead.
     3. **State Management**: Correctly handles `state_dict` calls.
@@ -869,7 +870,7 @@ class PeftProxy(PeftModel):
 
     def __getitem__(self, idx: Union[int, slice]):
         """
-        Supports index and slice access. 
+        Supports index and slice access.
         This is critical for YOLO's architecture analysis (e.g., `model[i]`).
         """
         base = self._get_base()
@@ -924,7 +925,7 @@ class PeftProxy(PeftModel):
 class LoRADetectionModel:
     """
     Mixin class for LoRA-enabled models.
-    
+
     Primary Functions:
     1. Flags the model as LoRA-enabled.
     2. Disables the default Ultralytics `fuse()` logic, preventing premature weight merging.
@@ -935,13 +936,20 @@ class LoRADetectionModel:
         return self
 
 # Wrapper classes for pickling support
-class LoRADetectionModelWrapper(LoRADetectionModel, DetectionModel): pass
-class LoRASegmentationModelWrapper(LoRADetectionModel, SegmentationModel): pass
-class LoRAPoseModelWrapper(LoRADetectionModel, PoseModel): pass
-class LoRAClassificationModelWrapper(LoRADetectionModel, ClassificationModel): pass
-class LoRAOBBModelWrapper(LoRADetectionModel, OBBModel): pass
-class LoRARTDETRDetectionModelWrapper(LoRADetectionModel, RTDETRDetectionModel): pass
-class LoRAWorldModelWrapper(LoRADetectionModel, WorldModel): pass
+class LoRADetectionModelWrapper(LoRADetectionModel, DetectionModel):
+    pass
+class LoRASegmentationModelWrapper(LoRADetectionModel, SegmentationModel):
+    pass
+class LoRAPoseModelWrapper(LoRADetectionModel, PoseModel):
+    pass
+class LoRAClassificationModelWrapper(LoRADetectionModel, ClassificationModel):
+    pass
+class LoRAOBBModelWrapper(LoRADetectionModel, OBBModel):
+    pass
+class LoRARTDETRDetectionModelWrapper(LoRADetectionModel, RTDETRDetectionModel):
+    pass
+class LoRAWorldModelWrapper(LoRADetectionModel, WorldModel):
+    pass
 
 
 def _wrap_top_level_lora_model(model: "DetectionModel", config: Any = None) -> "DetectionModel":

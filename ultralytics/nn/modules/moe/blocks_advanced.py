@@ -458,11 +458,6 @@ class HyperSplitMoE(nn.Module):
         # 3.3 Calculate Load Balancing Loss (Training only)
         if self.training:
             # Record data for loss calculation
-            loss_info = {
-                'router_probs': router_probs,
-                'router_logits': router_logits,
-                'topk_indices': topk_indices
-            }
             aux_loss = self.moe_loss_fn(router_probs, router_logits, topk_indices)
             _registry_set(self, aux_loss)
 

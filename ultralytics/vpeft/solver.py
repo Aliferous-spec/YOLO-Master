@@ -212,7 +212,6 @@ class AlternatingOptimizationSolver(ConstraintSolver):
     ) -> List[str]:
         """Local enumeration of a small candidate variant set per module."""
         n = graph.n_nodes
-        all_variants = ["lora", "dora", "loha", "lokr", "ia3", "oft", "boft", "hra"]
         # Small candidate set: current + two common variants
         candidates = list(set([current_xi[0]] + ["lora", "ia3"]))
 
@@ -787,7 +786,6 @@ class MIPRelaxationSolver(ConstraintSolver):
         n = graph.n_nodes
         utilities = graph.get_node_importances().tolist()
         hard_mask = constraints.get_hard_mask(graph, variant).bool().tolist()
-        m = len(self.rank_set)
 
         # Variables
         pi_vars = [solver.IntVar(0, 1, f"pi_{i}") for i in range(n)]

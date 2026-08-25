@@ -45,7 +45,7 @@ class LoRAConfig:
     variant: str = "lora"  # Adapter variant: "lora", "loha", "dora"
     include_head: bool = False  # Include detection head layers in target selection
     freeze_bn: bool = False  # Freeze BatchNorm layers during LoRA training
-    
+
     # Strategy Control
     lr_mult: float = 1.0
     include_moe: bool = True
@@ -140,13 +140,17 @@ class LoRAConfig:
     def __post_init__(self):
         """Performs parameter validation and type standardization."""
         # Standardize list inputs
-        if isinstance(self.kernels, str): self.kernels = _fast_parse_int_list(self.kernels)
-        if isinstance(self.exclude_modules, str): self.exclude_modules = _fast_parse_str_list(self.exclude_modules)
-        if isinstance(self.target_modules, str): self.target_modules = _fast_parse_str_list(self.target_modules)
+        if isinstance(self.kernels, str):
+            self.kernels = _fast_parse_int_list(self.kernels)
+        if isinstance(self.exclude_modules, str):
+            self.exclude_modules = _fast_parse_str_list(self.exclude_modules)
+        if isinstance(self.target_modules, str):
+            self.target_modules = _fast_parse_str_list(self.target_modules)
 
         # Logical validation
         if self.auto_r_ratio > 0:
-            if self.r < 0: self.r = 0 # Will be handled by auto logic
+            if self.r < 0:
+                self.r = 0  # Will be handled by auto logic
         elif self.r < 0:
             raise ValueError("lora_r must be >= 0")
 
@@ -195,10 +199,10 @@ class LoRAConfig:
 
         # Mapping: LoRAConfig field -> Ultralytics args attribute
         mapping = {
-            "r": "lora_r", 
-            "alpha": "lora_alpha", 
+            "r": "lora_r",
+            "alpha": "lora_alpha",
             "dropout": "lora_dropout",
-            "bias": "lora_bias", 
+            "bias": "lora_bias",
             "backend": "lora_backend",
             "variant": "lora_variant",
             "include_head": "lora_include_head",
@@ -206,16 +210,16 @@ class LoRAConfig:
             "lr_mult": "lora_lr_mult",
             "include_moe": "lora_include_moe",
             "include_attention": "lora_include_attention",
-            "only_backbone": "lora_only_backbone", 
+            "only_backbone": "lora_only_backbone",
             "exclude_modules": "lora_exclude_modules",
-            "last_n": "lora_last_n", 
-            "from_layer": "lora_from_layer", 
+            "last_n": "lora_last_n",
+            "from_layer": "lora_from_layer",
             "to_layer": "lora_to_layer",
-            "allow_depthwise": "lora_allow_depthwise", 
+            "allow_depthwise": "lora_allow_depthwise",
             "kernels": "lora_kernels",
             "skip_stem": "lora_skip_stem",
             "min_channels": "lora_min_channels",
-            "target_modules": "lora_target_modules", 
+            "target_modules": "lora_target_modules",
             "gradient_checkpointing": "lora_gradient_checkpointing",
             "auto_r_ratio": "lora_auto_r_ratio",
             "use_dora": "lora_use_dora",
@@ -282,20 +286,20 @@ class LoRAConfig:
         dataclass_fields = set(cls.__dataclass_fields__)
         final_args = {key: value for key, value in kwargs.items() if key in dataclass_fields}
 
-        for field, arg_name in mapping.items():
-            if field not in final_args and arg_name in kwargs:
+        for fname, arg_name in mapping.items():
+            if fname not in final_args and arg_name in kwargs:
                 val = kwargs.get(arg_name)
                 if val is not None:
-                    final_args[field] = val
-        
+                    final_args[fname] = val
+
         # Extract arguments from the args object
         if args is not None:
-            for field, arg_name in mapping.items():
-                if field not in final_args and hasattr(args, arg_name):
+            for fname, arg_name in mapping.items():
+                if fname not in final_args and hasattr(args, arg_name):
                     val = getattr(args, arg_name, None)
                     if val is not None:
-                        final_args[field] = val
-        
+                        final_args[fname] = val
+
         return cls(**final_args)
 
 
@@ -396,9 +400,9 @@ class LoRAConfigBuilder:
             start_idx = max(start_idx, layer_from)
         if layer_to is not None:
             end_idx = min(total_layers, layer_to)
-        
+
         apply_idx_filter = (last_n is not None) or (layer_from is not None) or (layer_to is not None)
-        
+
         if apply_idx_filter:
             LOGGER.debug(f"[LoRA] Layer filter active: {start_idx} - {end_idx}")
 
@@ -434,8 +438,9 @@ class LoRAConfigBuilder:
 
         # Iterate through all sub-modules
         for name, module in model.named_modules():
-            if not name: continue 
-            
+            if not name:
+                continue
+
             # 0. Explicit Exclusion
             if name in exclude_set:
                 continue
@@ -484,20 +489,20 @@ class LoRAConfigBuilder:
                 if module.groups > 1:
                     # FIX: Properly handle grouped convolutions.
                     # PEFT requires: LoRA rank must be a multiple of groups for Conv2d.
-                    # 
+                    #
                     # Key distinction:
                     # - Depthwise: groups == in_channels == out_channels (extremely sparse, usually skip)
                     # - Standard grouped conv: groups < in_channels (e.g., C3k2 uses groups=4, 8)
                     #   These should be INCLUDED if r % groups == 0.
-                    
+
                     is_depthwise = (module.in_channels == module.out_channels == module.groups)
-                    
+
                     # Check rank divisibility first
                     if r > 0 and (r % module.groups != 0):
                         # Skip to avoid PEFT ValueError
                         LOGGER.debug(f"[LoRA] Skipping {name}: groups={module.groups}, rank={r} (rank % groups != 0)")
                         continue
-                    
+
                     # Handle depthwise specifically
                     if is_depthwise:
                         # Only include depthwise if explicitly allowed
@@ -507,7 +512,7 @@ class LoRAConfigBuilder:
                         # Even if allowed, warn as depthwise LoRA is often ineffective
                         LOGGER.info(f"[LoRA] Including depthwise layer {name} (allow_depthwise=True)")
                     # else: standard grouped conv (groups < in_channels) -> ALLOW through
-                
+
                 # Pointwise Conv (1x1) Check - Highly Recommended for LoRA
                 # Standard Conv (3x3) Check - Supported
                 # Kernel Size Check
@@ -519,7 +524,7 @@ class LoRAConfigBuilder:
                     k_size = module.kernel_size
                     if k_size == 1 or k_size == (1, 1):
                         continue
-            
+
             # 5. Semantic Name Checks
             lname = name.lower()
 
@@ -582,11 +587,11 @@ class LoRAConfigBuilder:
     def calculate_auto_rank(model: nn.Module, targets: List[str], ratio: float) -> int:
         """
         Heuristically calculates the Rank based on the target parameter ratio.
-        
+
         Approximation: LoRA_Params ≈ Num_Targets * Rank * (In_Ch + Out_Ch)
         """
         if not targets or ratio <= 0:
-            return 16 
+            return 16
 
         total_params = sum(p.numel() for p in model.parameters())
         target_param_budget = total_params * ratio
@@ -596,9 +601,9 @@ class LoRAConfigBuilder:
         sample_size = min(len(targets), 50)
         step = max(1, len(targets) // sample_size)
         sampled_targets = targets[::step]
-        
+
         modules_dict = dict(model.named_modules())
-        
+
         for name in sampled_targets:
             m = modules_dict.get(name)
             if m:
@@ -611,10 +616,10 @@ class LoRAConfigBuilder:
             return 16
 
         avg_dim = sum(in_out_sums) / len(in_out_sums)
-        
+
         # R = Target_Params / (Num_Targets * Avg_Dim)
         raw_r = target_param_budget / (len(targets) * avg_dim)
-        
+
         # Clamp to range [4, 128] and round to nearest multiple of 4
         estimated_r = int(raw_r)
         estimated_r = max(4, min(128, estimated_r))
@@ -631,58 +636,58 @@ class LoRAConfigBuilder:
         auto_r_ratio: float = 0.0,
         peft_type: str = "lora",
         **kwargs
-    ) -> Union['LoraConfig', 'LoHaConfig', 'LoKrConfig',
+    ) -> Union['LoRAConfig', 'LoHaConfig', 'LoKrConfig',
                'IA3Config', 'OFTConfig', 'BOFTConfig', 'HRAConfig', None]:
         """Factory method: Generates a PEFT Config object."""
-        
+
         targets = kwargs.get('target_modules')
 
         # 1. Auto-detection & Validation
         # Even if targets are provided explicitly (e.g. ['conv']), we MUST run auto_detect_targets
         # to filter out incompatible layers (e.g. grouped convs where r % groups != 0).
         # We pass the explicit targets as a filter to auto_detect_targets.
-        
+
         # If targets is NOT None, we use it to restrict the search space of auto_detect_targets.
-        # But `auto_detect_targets` doesn't inherently support a "whitelist" input, 
+        # But `auto_detect_targets` doesn't inherently support a "whitelist" input,
         # it scans the whole model.
         # So we modify the logic: Always run auto_detect, but if explicit targets are provided,
         # we check if the auto-detected target matches the explicit list (partial match).
-        
+
         # Actually, simpler approach:
         # Pass the explicit targets (if any) as a "whitelist" to auto_detect_targets?
         # No, auto_detect_targets is designed to scan.
-        
+
         # Better: Let's just always run auto_detect_targets.
         # If kwargs['target_modules'] was set, we need to handle it carefully.
         # If the user said "conv", they imply "all valid convs".
         # So we should clear 'target_modules' from kwargs before calling auto_detect,
         # but use the user's input as a guide.
-        
+
         user_targets = kwargs.get('target_modules')
-        
+
         # If user provided targets, we temporarily remove it to let auto_detect scan freely,
         # but we need to ensure auto_detect respects the USER's intent (e.g. only 'conv').
         # However, auto_detect has its own logic.
-        
+
         # CORRECT APPROACH:
         # Run auto_detect_targets with all constraints.
         # If user_targets is provided (e.g. ['conv']), we treat it as an additional filter on the result.
         # Wait, if user provided ['conv'], auto_detect might return ['model.0.conv', ...].
         # We want the intersection of "valid layers" and "user request".
-        
+
         # So:
         # 1. Run auto_detect to find ALL structurally valid layers (skipping bad grouped convs).
         # 2. If user provided targets, filter the valid list to only include those matching user's string.
-        
-        # To do this, we must ensure auto_detect doesn't get 'target_modules' in kwargs, 
+
+        # To do this, we must ensure auto_detect doesn't get 'target_modules' in kwargs,
         # otherwise it might be confused if it expects it to be None for auto-mode.
-        
+
         detect_kwargs = kwargs.copy()
         if 'target_modules' in detect_kwargs:
             del detect_kwargs['target_modules']
-            
+
         valid_targets = LoRAConfigBuilder.auto_detect_targets(model, r=r, **detect_kwargs)
-        
+
         if user_targets:
             targets = _filter_target_modules(valid_targets, user_targets)
         else:
@@ -740,7 +745,7 @@ class LoRAConfigBuilder:
         target_modules_val = targets
         if user_targets and peft_type.lower() != "adalora":
             target_modules_val = _build_peft_exact_target_regex(targets)
-            
+
         # 4. Common arguments
         common_kwargs = {
             "r": r,
@@ -748,10 +753,10 @@ class LoRAConfigBuilder:
             "exclude_modules": kwargs.get('exclude_modules'), # FIX: Pass exclude_modules to LoraConfig!
             "task_type": None, # YOLO custom models usually do not require task_type
         }
-        
+
         # 5. Dispatch based on PEFT type
         peft_type = peft_type.lower()
-        
+
         if peft_type == "loha":
             # LoHa specific
             return LoHaConfig(
@@ -759,7 +764,7 @@ class LoRAConfigBuilder:
                 module_dropout=kwargs.get('dropout', 0.0),
                 **common_kwargs
             )
-            
+
         elif peft_type == "lokr":
             # LoKr specific
             return LoKrConfig(

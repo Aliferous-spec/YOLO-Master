@@ -2,11 +2,13 @@
 import json
 import sys
 from pathlib import Path
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 import torch
 
 from ultralytics.utils import LOGGER
+if TYPE_CHECKING:
+    from ultralytics.engine.model import DetectionModel
 
 
 def _lora_pkg():
@@ -16,7 +18,7 @@ def _lora_pkg():
 def save_lora_adapters(model: "DetectionModel", path: Union[str, Path]) -> bool:
     """
     Saves only the LoRA Adapter weights.
-    
+
     Args:
         model: LoRADetectionModel instance.
         path: Directory path for saving.
@@ -33,7 +35,7 @@ def save_lora_adapters(model: "DetectionModel", path: Union[str, Path]) -> bool:
     path.mkdir(parents=True, exist_ok=True)
     backend = getattr(model, "lora_backend", "peft")
     variant = getattr(model, "lora_variant", "lora")
-    
+
     try:
         if backend == "fallback":
             fallback_state = _lora_pkg()._collect_fallback_adapter_state(model)
@@ -197,18 +199,18 @@ def _find_original_model_class(model: "DetectionModel"):
         DetectionModel, SegmentationModel, PoseModel,
         ClassificationModel, OBBModel, RTDETRDetectionModel, WorldModel
     )
-    
+
     # Known original classes
     ORIGINAL_CLASSES = {
         DetectionModel, SegmentationModel, PoseModel,
         ClassificationModel, OBBModel, RTDETRDetectionModel, WorldModel
     }
-    
+
     # Check all bases in MRO order
     for cls in model.__class__.__mro__:
         if cls in ORIGINAL_CLASSES:
             return cls
-    
+
     # Fallback to DetectionModel if we can't determine the original class
     return DetectionModel
 
@@ -245,20 +247,20 @@ def merge_lora_weights(model: "DetectionModel") -> bool:
 
     try:
         LOGGER.info("[LoRA] 🔄 Merging adapters into base model...")
-        
+
         # merge_and_unload returns the clean base model (nn.Sequential)
         merged_base = model.model.merge_and_unload()
-        
+
         # Restore structure
         model.model = merged_base
-        
+
         # Restore original class using robust MRO inspection
         original_cls = _lora_pkg()._find_original_model_class(model)
         model.__class__ = original_cls
-        
+
         # Clear flags
         _lora_pkg()._clear_lora_runtime_state(model)
-            
+
         LOGGER.info(f"[LoRA] ✅ Merge completed. Model restored to {original_cls.__name__} architecture.")
         return True
     except Exception as e:

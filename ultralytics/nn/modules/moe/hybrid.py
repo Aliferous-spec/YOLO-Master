@@ -791,7 +791,7 @@ class AdaptiveBalanceController(nn.Module):
     2. Mid Training: Gradually decrease weight.
     3. Late Training: Low weight, allowing expert differentiation.
     """
-    
+
     def __init__(
         self,
         num_experts,
@@ -814,14 +814,14 @@ class AdaptiveBalanceController(nn.Module):
             MoEDynamicScheduler(dynamic_scheduler_config) if dynamic_scheduler_config is not None else None
         )
         self.last_dynamic_schedule = None
-        
+
         # Learnable expert importance weights
         self.expert_importance = nn.Parameter(torch.ones(num_experts))
-    
+
     def forward(self, routing_stats, training_step):
         """Calculate adaptive load balancing loss."""
         expert_usage = routing_stats['expert_usage']  # [num_experts]
-        
+
         # === 1. Dynamic Coefficient Decay ===
         progress = min(1.0, training_step.float() / self.decay_steps)
         current_coeff = self.initial_coeff * (1 - progress) + self.final_coeff * progress
@@ -829,7 +829,7 @@ class AdaptiveBalanceController(nn.Module):
             schedule_state = self.dynamic_scheduler.step(expert_usage, float(current_coeff))
             current_coeff = schedule_state.balance_loss_coeff
             self.last_dynamic_schedule = schedule_state.to_dict()
-        
+
         # === 2. Differentiable Load Balancing (GShard scale, grad -> router) ===
         # importance = mean(router_probs) keeps the gradient path to the router;
         # the learnable expert_importance acts as a (soft) target prior. Falls

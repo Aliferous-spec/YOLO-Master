@@ -456,7 +456,6 @@ class MoLoRALayer(nn.Module):
 
         Optimized path: groups samples by expert to avoid per-sample loops.
         """
-        B = x.shape[0]
         K = top_k_indices.shape[1]
         expert_out = torch.zeros_like(out_template)
 

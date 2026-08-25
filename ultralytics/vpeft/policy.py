@@ -392,7 +392,6 @@ class SoftRankAllocator(RankAllocator, nn.Module):
             # Fallback: create dummy embeddings (for testing / cold-start)
             node_embeddings = torch.randn(graph.n_nodes, self.hidden_dim, dtype=torch.float32)
 
-        N = node_embeddings.shape[0]
 
         # Continuous prediction hat_r_i
         hat_r = self.rank_predictor(node_embeddings).squeeze(-1)  # [N]

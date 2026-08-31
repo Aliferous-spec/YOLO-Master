@@ -1,0 +1,232 @@
+{
+  "status": "ok",
+  "arm": "e3",
+  "git_commit": "1c4669f9ee44c1c5e5759d93b49e68ce2531d3b3",
+  "git_dirty": true,
+  "git_dirty_files": [
+    " M README.md",
+    " M README_reproduce.md",
+    " M \"smoke/e3-admission/E3_\\345\\207\\206\\345\\205\\245\\346\\243\\200\\346\\237\\245_\\346\\212\\200\\346\\234\\257\\344\\272\\247\\345\\207\\272.md\"",
+    " M smoke/e3-admission/README_CN.md",
+    "?? scripts/run_e3_first_round.py"
+  ],
+  "checkpoint": {
+    "source": "random_init_from_yaml",
+    "path": null,
+    "sha256": "a90ea997903241cf6e837520e6fcaf0ba9159e96ae894b67624b556dd5574267",
+    "arms_run_on": "same_fused_model_object"
+  },
+  "model_config": "D:\\YOLO-Master\\ultralytics\\cfg\\models\\master\\v0_9\\det\\yolo-master-n.yaml",
+  "dataset": "D:\\YOLO-Master\\ultralytics\\cfg\\datasets\\coco8.yaml",
+  "split": "val",
+  "imgsz": 640,
+  "batch": 1,
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "seed": 0,
+  "conf": 0.001,
+  "iou": 0.7,
+  "max_det": 300,
+  "warmup": 0,
+  "repeat": 1,
+  "observer": "ExpertUsageTracker (MoE routers)",
+  "timestamp": {
+    "start": "2026-08-31T23:08:08+08:00",
+    "end": "2026-08-31T23:08:10+08:00"
+  },
+  "command": "scripts\\run_e3_first_round.py --name 002_e3_first_round_moe --model ultralytics\\cfg\\models\\master\\v0_9\\det\\yolo-master-n.yaml --data ultralytics\\cfg\\datasets\\coco8.yaml --split val --imgsz 640 --batch 1 --device cpu --seed 0 --conf 0.001 --iou 0.7 --max-det 300",
+  "metrics": {
+    "mAP50": 0.0,
+    "mAP50-95": 0.0,
+    "precision": 0.0,
+    "recall": 0.0
+  },
+  "latency_ms_per_image": {
+    "preprocess": 0.28392499370966107,
+    "inference": 47.92070000257809,
+    "loss": 0.0016250123735517263,
+    "postprocess": 0.2773500164039433
+  },
+  "latency_total_ms_per_image": 48.48360002506524,
+  "validation_images": 4,
+  "duration_s": 0.261,
+  "routing": {
+    "observation_source": "ExpertUsageTracker",
+    "entropy_definition": "Shannon entropy (natural log) over expert_usage_share",
+    "gini_function": "usage_gini (ultralytics/nn/modules/moe/protocol.py)",
+    "layers": [
+      {
+        "routing_layer": "model.11.routing",
+        "module_type": "DualStreamGateRouter",
+        "num_experts": 16,
+        "top_k": 2,
+        "expert_usage_counts": [
+          4.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          2.0,
+          0.0,
+          0.0
+        ],
+        "expert_usage_share": [
+          0.4,
+          0.0,
+          0.1,
+          0.1,
+          0.1,
+          0.0,
+          0.1,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.2,
+          0.0,
+          0.0
+        ],
+        "mean_topk_weight": [
+          0.5169612020254135,
+          0.0,
+          0.4859016537666321,
+          0.504097580909729,
+          0.49589693546295166,
+          0.0,
+          0.4744533598423004,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.4858859032392502,
+          0.0,
+          0.0
+        ],
+        "usage_gini": 0.7374999523162842,
+        "usage_entropy": 1.6094379124341003,
+        "dominant_expert": 0,
+        "dominant_share": 0.4,
+        "routing_probability_mean": {
+          "available": false,
+          "value": null,
+          "note": "MoE v0_9 router eval path returns top-k only; full softmax probabilities are not exposed"
+        },
+        "routing_entropy": {
+          "available": false,
+          "value": null,
+          "note": "not derivable without full routing probabilities"
+        },
+        "basis": "usage_counts"
+      },
+      {
+        "routing_layer": "model.5.routing",
+        "module_type": "DualStreamGateRouter",
+        "num_experts": 4,
+        "top_k": 2,
+        "expert_usage_counts": [
+          0.0,
+          0.0,
+          5.0,
+          5.0
+        ],
+        "expert_usage_share": [
+          0.0,
+          0.0,
+          0.5,
+          0.5
+        ],
+        "mean_topk_weight": [
+          0.0,
+          0.0,
+          0.5123450040817261,
+          0.4876530885696411
+        ],
+        "usage_gini": 0.5,
+        "usage_entropy": 0.6931471805599453,
+        "dominant_expert": 2,
+        "dominant_share": 0.5,
+        "routing_probability_mean": {
+          "available": false,
+          "value": null,
+          "note": "MoE v0_9 router eval path returns top-k only; full softmax probabilities are not exposed"
+        },
+        "routing_entropy": {
+          "available": false,
+          "value": null,
+          "note": "not derivable without full routing probabilities"
+        },
+        "basis": "usage_counts"
+      },
+      {
+        "routing_layer": "model.8.routing",
+        "module_type": "DualStreamGateRouter",
+        "num_experts": 8,
+        "top_k": 2,
+        "expert_usage_counts": [
+          5.0,
+          5.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expert_usage_share": [
+          0.5,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean_topk_weight": [
+          0.46313663125038146,
+          0.536859667301178,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "usage_gini": 0.75,
+        "usage_entropy": 0.6931471805599453,
+        "dominant_expert": 0,
+        "dominant_share": 0.5,
+        "routing_probability_mean": {
+          "available": false,
+          "value": null,
+          "note": "MoE v0_9 router eval path returns top-k only; full softmax probabilities are not exposed"
+        },
+        "routing_entropy": {
+          "available": false,
+          "value": null,
+          "note": "not derivable without full routing probabilities"
+        },
+        "basis": "usage_counts"
+      }
+    ],
+    "aggregate": {
+      "routed_layers": 3,
+      "collapsed_layers": 0,
+      "mean_gini": 0.6624999841054281,
+      "mean_dominant_share": 0.4666666666666666,
+      "total_tokens": 15
+    }
+  }
+}

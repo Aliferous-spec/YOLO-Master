@@ -1,20 +1,79 @@
-# E3 路由透视镜 · 8.24 准入检查（smoke/e3-admission）
+# E3 路由 Smoke 测试
 
-**锁定 commit**：`3eb6cd914b651a06e2cd08ea87d12c28cab95502`（2026-08-23，main 分支）
-**环境**：Python 3.11.9 + torch 2.13.0+cpu（CPU-only，Windows 本机复跑）
-**验证方式**：三类路由（MoE / MoT / Latent）全部实测跑通，非纸面推演
+> 一句话说明：本目录记录对 YOLO-Master 三种路由模块（MoE / MoT / Latent Mixture）的路由行为
+> smoke 验证——在未训练（随机初始化）模型上运行前向/验证，采集路由统计并归档证据。
+> 本验证只说明“代码可以运行、数据可以采集”，不评估模型效果，也不代表训练后行为。
 
----
+## 当前状态
 
-## 一、怎么运行
+已完成：
 
-MoT 路由 smoke test（官方合成场景脚本，无需数据集）：
+- 已完成三类模块（MoT / MoE / Latent）的 Smoke 测试：三条命令均可运行并采集到路由统计数据。
+  Smoke 只证明代码可运行、数据可采集，不代表模型性能或训练后效果已验证
+- 本次 smoke 使用的路由诊断/采集代码（均位于锁定上游 commit 内）：
+  `scripts/diagnose_mot_routing.py`、`ultralytics/nn/modules/moe/analysis.py`
+  （`ExpertUsageTracker`）、`ultralytics/nn/modules/latent_mixture.py`
+  （`last_routing_snapshot`）
+- 输出证据已归档到本目录：终端日志、3 个 CSV、1 张热力图 PNG
+- hook 开销测量脚本已入库：`scripts/measure_routing_hook_overhead.py`
+  （本次测量数值未单独归档日志，见“当前限制”）
+
+未完成：
+
+- 统一路由字段 schema：只有设计草案，未实现（见 `E3_准入检查_技术产出.md`）
+- 统一采集层 adapter：未实现
+- 训练后 checkpoint 上的路由坍塌复测：未做（当前只覆盖随机初始化模型）
+- MoT 在 MOT 跟踪任务上的评估：未做
+
+## 实际做了什么
+
+仓库基线是 ultralytics 8.4.101 的 YOLO-Master fork（本地分支 `baseline/2026-08-22`）。
+E3 阶段对三类路由模块做了可复现的路由行为验证：
+
+- MoT（`ultralytics/cfg/models/master/v0_10/det/yolo-master-mot-n.yaml`）：
+  用 `scripts/diagnose_mot_routing.py --synthetic` 生成 4 类合成场景
+  （`dense_small` / `large_regular` / `irregular_occluded` / `sparse_small`），无需数据集
+- MoE（`ultralytics/cfg/models/master/v0_9/det/yolo-master-n.yaml`）：
+  用 `ExpertUsageTracker` hook 在 coco8 验证集（4 张图，自动下载）上采集
+  各 router 的专家命中（hits）与加权和（weighted_sum）
+- Latent（`ultralytics/cfg/models/26/yolo26-master-latent-n.yaml`）：
+  随机 640×640 单张前向，读取 `last_routing_snapshot`
+
+观察到的现象（未训练基线的真实特征，不是脚本 bug）：
+
+- MoT 在全部 4 类场景下 `LocalConvTransformer` 专家的 `top1_share` 恒为 1.00，
+  另外两个专家为 0——随机初始化阶段即出现专家坍塌
+- MoE 的 3 个 router（`model.5.routing` / `model.8.routing` / `model.11.routing`）
+  均成功挂 hook，`usage_stats` 有正常数值
+- Latent 的 3 个模块（`model.23` / `model.24` / `model.25`）的 `last_routing_snapshot`
+  字段数均为 36，见 `e3_完整终端日志.txt` 的 Latent 段落
+
+## 代码现状与已验证的修复（位于锁定上游 commit 内）
+
+当前代码与锁定上游 commit `3eb6cd9` 一致；以下修复在复现/验证时被确认生效，
+但属于上游已包含的内容，本仓库未新增：
+
+- `top_k == num_experts` 时验证不再误走稀疏裁剪：稀疏分支仅在
+  `top_k < num_experts` 时生效（`ultralytics/nn/modules/moe/modules.py:616`）
+- `_blend_experts` dtype 不匹配（Half×Float）修复：见
+  `experiments/issue54_mot_ablation/REPORT.md`（`block.py` 中 `.to(out.dtype)`）
+- MoT 稀疏调度遥测与 warmup 计数器修复：上游提交 `e183ea4`
+- 验证器已包含 `LOCAL_RANK` / `torch_distributed_zero_first` 导入，并仅对 `.ndjson`
+  数据调用现有转换器（`ultralytics/engine/validator.py`，见 `README_reproduce.md`）
+
+## 如何复现
+
+环境：Windows 本机，Python 3.11.9，torch 2.13.0+cpu（CPU-only）。
+复跑分支 `baseline/2026-08-22`；仓库锁定上游 commit
+`3eb6cd914b651a06e2cd08ea87d12c28cab95502`（上游 main，2026-08-23）。
+
+MoT 路由 smoke：
 
 ```bash
 python scripts/diagnose_mot_routing.py --synthetic --device cpu --nc 80
 ```
 
-MoE 路由 smoke test（真实 coco8 数据集，自动下载）：
+MoE 路由 smoke（coco8 自动下载）：
 
 ```python
 from ultralytics import YOLO
@@ -26,7 +85,7 @@ with ExpertUsageTracker(model.model) as tracker:
     print(tracker.usage_stats)
 ```
 
-Latent Mixture 路由快照采集：
+Latent 路由快照：
 
 ```python
 from ultralytics import YOLO
@@ -43,134 +102,87 @@ for name, mod in m.named_modules():
         print(name, list(snap.keys()))
 ```
 
-## 二、使用什么场景
+运行原始输出写入 `runs/`（已被 `.gitignore` 忽略，不入库），归档副本见本目录。
 
-- **MoT**：官方脚本内置 4 类合成场景 `dense_small` / `large_regular` / `irregular_occluded` / `sparse_small`，纯合成输入，无需数据集
-- **MoE**：真实 `coco8` 验证集（自动下载，4 张图）
-- **Latent**：随机 640×640 单张输入 `torch.randn(1, 3, 640, 640)`
+## Smoke 测试结果与证据文件
 
-## 三、输出什么
+| 文件 | 内容 | 结果 |
+| --- | --- | --- |
+| `e3_完整终端日志.txt` | 三条 smoke 的完整终端输出 | 三个段落齐全，日志以“日志生成完毕”结尾 |
+| `mot_routing_scenarios.csv` | 4 场景 × 3 专家的 `top1_share` 均值 | 全部场景 `LocalConvTransformer=1.00`，其余专家为 0 |
+| `mot_routing_detailed.csv` | 逐层逐专家 `top1_share` / `mean_weight` / token 统计 | 与场景表一致 |
+| `mot_deformable_activation_check.csv` | Deformable 专家激活显著性检查（baseline vs irregular） | 未训练模型下无显著差异 |
+| `mot_expert_heatmap_top1_share.png` | 专家 `top1_share` 热力图 | 图片有效可打开 |
 
-MoT smoke test 生成 4 个文件：
+MoE：`model.5.routing` / `model.8.routing` / `model.11.routing` 均显示 `✅ Hooked`；
+coco8 val 4/4 跑完；`usage_stats` 输出 hits / weighted_sum 正常数值。
+Latent：`model.23/24/25` 的 `last_routing_snapshot` 字段数均为 36，见 `e3_完整终端日志.txt` 的 Latent 段落。
 
-- `mot_routing_detailed.csv`：逐层逐专家 `top1_share` / `mean_weight` / token 统计
-- `mot_routing_scenarios.csv`：4 类场景 × 3 专家的 `top1_share` 均值
-- `mot_deformable_activation_check.csv`：Deformable 专家激活显著性检查（baseline vs irregular 场景）
-- `mot_expert_heatmap_top1_share.png`：专家 `top1_share` 热力图
+完整原始输出见 `e3_完整终端日志.txt`。
 
-MoE：`ExpertUsageTracker.usage_stats`（3 个 router 模块的专家 hits / weighted_sum）
-Latent：`model.23` / `model.24` / `model.25` 的 `last_routing_snapshot`（36 个字段）
+## 其他真实实验
 
-## 四、输出文件在哪里
+本仓库中与 E3 相关的其他实验（文件均位于锁定上游 commit 内，非本仓库新增；均有仓库证据）：
 
-- 运行原始输出：`runs/mot_ablation/routing/`（脚本自动写入；`runs/` 已被 `.gitignore` 忽略，不入库）
-- 准入检查归档副本：`smoke/e3-admission/`（本目录，入库）
-  - `e3_完整终端日志.txt`
-  - `mot_routing_detailed.csv`
-  - `mot_routing_scenarios.csv`
-  - `mot_deformable_activation_check.csv`
-  - `mot_expert_heatmap_top1_share.png`
-- MoE 验证额外产物：`runs/detect/val-2`（coco8 val 结果）
+- 犀牛鸟复现（VisDrone / SKU-110K，120 epoch）：`README_reproduce.md`、`scripts/reproduce/`。
+  注意：120 轮原始 `results.csv` 未入库（`artifacts/` 被 gitignore），报告中的表格数字
+  无法在仓库内直接核对。
+- issue49 垂直数据集基线训练（VisDrone / GlobalWheat2020）：
+  `scripts/issue49/`、`scripts/reproduce/results/issue49_*.csv`
+- issue52 coco128 专家剪枝与动态调度：
+  `reports/moe-pruning/*.csv`、`reports/issues-52-moe-pruning-dynamic-scheduling.md`
+  （质量门槛未通过，见下）
+- issue53 MoA vs MoE VisDrone 训练验证（50 epoch）：
+  `reports/issue-53-training-validation.md`
+- issue54 VisDrone MoT/MoA 消融（4 变体，50 epoch，A40）：
+  `experiments/issue54_mot_ablation/`（`REPORT.md` 与 4 个 `results.csv` 一致）
+- CI 状态：`.github/workflows/ci.yml` 中的 `MixtureDDP` / `MixtureP0Regression` 回归作业
+  来自上游（fork 未新增这些作业）。远端 `main` 最近一次 CI 通过（2026-08-25）；
+  此前 E3 相关提交曾出现 CI 失败，由后续 `fix(ci)` 提交修复。
+  本地 `baseline/2026-08-22` 分支未单独触发 CI。
 
-## 五、如何判断结果成功
+## 失败/未完成实验
 
-1. 完整日志包含 [1] MoT、[2] MoE、[3] Latent 三个段落，且以「日志生成完毕」结尾
-2. **MoT**：命令退出码为 0；日志中 4 次出现 `[routing] wrote ...`（对应 4 个输出文件）；CSV 非空，覆盖 4 类场景 × 3 专家
-3. **MoE**：`model.5.routing` / `model.8.routing` / `model.11.routing` 均显示 `✅ Hooked`；`usage_stats` 非空，hits / weighted_sum 为正常数值；coco8 val 4/4 跑完
-4. **Latent**：`model.23/24/25` 均输出非空 `last_routing_snapshot`，字段数 35-36（随机初始化权重不同，重跑时字段数可能有 ±1 浮动，属正常现象）
-5. 热力图 PNG 可正常打开，展示 4 类场景 × 3 专家的 `top1_share`
+- issue52 剪枝：coco128 上 threshold=0.05 直接剪枝后 mAP50-95 由 0.540 降至 0.113，
+  LoRA10 恢复至 0.465；threshold≥0.1 直接归零。所有档位 `quality_gate_pass=false`，
+  **质量门槛未通过**。该实验如实保留，不当作成功结论。
+- issue54：MoT / MoA 在单帧 VisDrone 检测上均低于 MoE 基线（v10 mAP50 0.20768 最高），
+  其价值需在 MOT 跟踪任务上评估，该项未完成。
+- 统一 schema / 采集层：未实现，仅有字段对照草案。
 
-**真实观察（属预期基线现象，不是脚本 bug）**：未训练（随机初始化）模型在全部 4 类合成场景下，`LocalConvTransformer` 专家的 `top1_share` 恒为 1.00，另外两个专家为 0——初始化阶段即出现专家坍塌，这是训练前基线的真实特征。
+## 当前限制
 
-## 六、现象命令（仅真实执行过的命令）
+- 当前测试使用未训练（随机初始化）权重，Smoke 只证明代码可运行、数据可采集，不代表训练后行为
+- 统一 routing schema 尚未实现，目前只有字段对照草案（见 `E3_准入检查_技术产出.md`）
+- 训练后 checkpoint 上的路由行为复测尚未完成
+- MoT 在 MOT 跟踪任务上的效果尚未验证
+- issue52 剪枝实验未通过质量门槛（`quality_gate_pass=false`，如实保留，不作成功结论）
+- hook 开销测量脚本已入库（`scripts/measure_routing_hook_overhead.py`），测量方法见
+  `E3_准入检查_技术产出.md`；本次测量数值未单独归档日志，可自行复跑验证
+- 运行原始输出在 `runs/`（不入库），仓库内只有本目录的归档副本
+- 本仓库不包含预训练权重（`*.pt` 不入库）
 
-以下命令均来自 `e3_完整终端日志.txt`，为实际执行过的命令：
+## 与上游 YOLO-Master 的关系
 
-[1] MoT 路由 smoke test：
+本仓库是 [Tencent/YOLO-Master](https://github.com/Tencent/YOLO-Master) 的 fork
+（远端 `Aliferous-spec/YOLO-Master`）。
 
-```bash
-python scripts/diagnose_mot_routing.py --synthetic --device cpu --nc 80
-```
+本仓库以锁定上游 commit `3eb6cd9` 为界：
 
-[2] MoE 路由 smoke test（ExpertUsageTracker 用法）：
+- 上游内容（锁定 commit 中已存在，非本仓库新增）：MoE / MoT / MoA / Latent 模型实现
+  与配置、路由诊断脚本 `scripts/diagnose_mot_routing.py`、复现脚本与报告
+  （`scripts/reproduce/`、`README_reproduce.md`）、issue49/52/53/54 实验与报告、
+  `MixtureDDP` / `MixtureP0Regression` CI 回归作业、ultralytics 8.4.101 迁移基线
+  （`reports/migration/v8.4.101-native-baseline.json`）
+- 本仓库独有（锁定 commit 中不存在）：本目录的 smoke 证据与文档（终端日志、3 个 CSV、
+  热力图 PNG、本 README、`E3_准入检查_技术产出.md`）、hook 开销测量脚本
+  （`scripts/measure_routing_hook_overhead.py`）
+- 上游 README 中的性能数字（如 42.4% AP @ 1.62ms、+0.8%、17.8% faster）在本仓库
+  未独立复现
 
-```python
-from ultralytics import YOLO
-from ultralytics.nn.modules.moe.analysis import ExpertUsageTracker
+## 项目结构与版本信息
 
-model = YOLO('ultralytics/cfg/models/master/v0_9/det/yolo-master-n.yaml')
-with ExpertUsageTracker(model.model) as tracker:
-    model.val(data='coco8.yaml', split='val', batch=1, device='cpu', verbose=False)
-    print(tracker.usage_stats)
-```
-
-[3] Latent Mixture 路由快照采集：
-
-```python
-from ultralytics import YOLO
-import torch
-
-model = YOLO('ultralytics/cfg/models/26/yolo26-master-latent-n.yaml')
-m = model.model.eval()
-with torch.no_grad():
-    m(torch.randn(1, 3, 640, 640))
-
-for name, mod in m.named_modules():
-    snap = getattr(mod, 'last_routing_snapshot', None)
-    if snap:
-        print(name, list(snap.keys()))
-```
-
-## 七、配置文件
-
-使用 synthetic 场景，无额外 YAML 配置；运行参数见 README_CN.md。
-
-> 注：三类路由使用仓库自带的模型 YAML（`ultralytics/cfg/models/master/v0_10/det/yolo-master-mot-n.yaml`、`ultralytics/cfg/models/master/v0_9/det/yolo-master-n.yaml`、`ultralytics/cfg/models/26/yolo26-master-latent-n.yaml`），均为内置配置，无外部独立配置文件。
-
-## 八、完整日志
-
-- 文件：`smoke/e3-admission/e3_完整终端日志.txt`
-- GitHub：[e3_完整终端日志.txt](https://github.com/Aliferous-spec/YOLO-Master/blob/baseline/2026-08-22/smoke/e3-admission/e3_完整终端日志.txt)
-
-## 九、结果截图
-
-- 文件：`smoke/e3-admission/mot_expert_heatmap_top1_share.png`
-- GitHub：[mot_expert_heatmap_top1_share.png](https://github.com/Aliferous-spec/YOLO-Master/blob/baseline/2026-08-22/smoke/e3-admission/mot_expert_heatmap_top1_share.png)
-- 预览：
-
-![mot_expert_heatmap_top1_share](mot_expert_heatmap_top1_share.png)
-
-## 十、设计说明
-
-（依据 E3 技术产出整理，按实际实现微调）
-
-三类路由（MoE / MoT / Latent）的原生字段粒度差异很大，统一 schema 需要做字段对齐与降维，而不是简单拼接。统一字段草案：
-
-| 统一字段（拟） | MoE 来源 | MoT 来源 | Latent 来源 | 说明 |
-|---|---|---|---|---|
-| `num_experts` | `num_experts` | `num_experts` | `num_experts` | 三类原生都有，可直接对齐 |
-| `top_k` | `top_k` | `top_k` | `top_k` / `training_top_k` / `inference_top_k` | Latent 区分训练/推理两套 top_k，需要在统一层做归一 |
-| `expert_usage` | 由 `ExpertUsageTracker.usage_stats` 聚合 hits/weighted_sum 推导 | `expert_usage`（直接张量） | `expert_usage` | 三类张量形状需统一为 `[num_experts]` 浮点列表 |
-| `aux_loss` | 通过 `routing_protocol.RoutingAuxPublisher` 统一通道获取 | `aux_loss` | `aux_loss` | 唯一天然已经跨三类统一的字段 |
-| `dominant_expert` / `dominant_share` | MoE 诊断类原生支持（`MoELayerDiagnostic`） | 需从 `expert_usage` 现算 | 需从 `expert_usage` 现算 | MoT/Latent 缺此字段，需在采集层补算 |
-| `collapse_flag` | 原生支持 | 需自定义阈值判断（可复用 MoT 热力图观察到的坍塌案例） | 需自定义阈值判断 | 建议阈值可先沿用 MoE 侧的 0.8 |
-| `scene_context` | 无 | `scene_aware` / `scene_stats` / `scene_bias` | 无 | MoT 独有字段，其余两类留空 |
-| `value_fusion_*` | 无 | 无 | `value_fusion_mode` / `value_fusion_weights` | Latent 独有字段，体现其「融合」而非「选择」的路由范式 |
-
-**核心难点**：MoE 偏向「离散选择」语义（dominant expert、collapse），MoT 带场景条件（scene-aware），Latent 是「连续融合」语义（value fusion），三者不是同一套路由范式的简单变体，统一 schema 需要设计一个带 `routing_paradigm` 标记位的父结构，而不是强行拉平字段。
-
-**采集机制**：MoE 侧依赖 `ExpertUsageTracker` 的 hook 机制；MoT / Latent 原生自带 `last_routing_snapshot` 属性。两条实现路径并存，统一采集层需要做适配层（adapter），而非假设三类接口一致。
-
-**开销测量（已实测，2026-08-25 本机复跑）**：
-
-1. 对照组设计：同一模型、同一批数据，分别在「开启 hook 采集」与「关闭 hook」两种状态下跑 100 次前向，用 `time.perf_counter()` 分别记录总耗时
-2. 测量口径：只测前向 + hook 回调耗时，不含数据加载和后处理
-3. 验收标准：额外开销占比 = (开 hook 耗时 - 关 hook 耗时) / 关 hook 耗时，目标 < 10%
-4. 降级方案：若开销超标，优先降级为「仅静态快照（forward 后一次性读取），不做逐 step 实时记录」，放弃实时面板，保留离线分析能力
-5. **实测结果（2026-08-25，本机复跑）**：运行 `scripts/measure_routing_hook_overhead.py`（yolo-master-n @ 640×640，50 次前向）：关 hook 77.6 ms/次，开 hook 78.7 ms/次，**额外开销 1.50%**，满足 < 10% 目标
-
-## 十一、风险与降级
-
-- **风险1**：Latent 字段数量（35 个）远超 MoE/MoT，若三类强行统一为同一张表，会有大量空值列，可读性差 → **降级**：采用「公共字段 + 各类专属字段」两层结构，而非单一扁平表
-- **风险2**：当前验证均为未训练模型（随机权重），坍塌现象是否为训练前特有还是训练后依然存在，尚未验证 → 后续需在真实训练 checkpoint 上复测
-- **风险3**：MoE 侧目前依赖 `ExpertUsageTracker` 的 hook 机制，与 MoT/Latent 原生自带的 `last_routing_snapshot` 属性机制不是同一套实现路径 → 统一采集层需要做适配层（adapter），而非假设三类接口一致
+- 锁定上游 commit：`3eb6cd914b651a06e2cd08ea87d12c28cab95502`（上游 main，2026-08-23）
+- 本地复跑分支：`baseline/2026-08-22`（工作区无代码改动，仅文档修订未提交）
+- 环境：Python 3.11.9 + torch 2.13.0+cpu
+- 字段说明、设计草案与实验细节：见 `E3_准入检查_技术产出.md`

@@ -33,6 +33,39 @@
 
 ---
 
+> **Fork notice (read this first).**
+> [Tencent/YOLO-Master](https://github.com/Tencent/YOLO-Master) (remote
+> `Aliferous-spec/YOLO-Master`, current branch `baseline/2026-08-22`).
+> The README below is the upstream README and describes the upstream YOLO-Master
+> project (CVPR 2026 paper / arXiv). It is kept here for reference.
+>
+> Content in this repo comes from two sources:
+> - **Fork-exclusive** (not present in upstream at the locked commit): routing
+>   smoke tests and evidence for MoE / MoT / Latent in `smoke/e3-admission/`, and
+>   `scripts/measure_routing_hook_overhead.py`.
+> - **Carried from upstream** (already present in upstream `main` at the locked
+>   commit; this fork did not author them): the VisDrone / SKU-110K reproduction
+>   (`README_reproduce.md`, `scripts/reproduce/`), issue49/52/53/54 experiments and
+>   reports, the ultralytics 8.4.101 migration baseline
+>   (`reports/migration/v8.4.101-native-baseline.json`), and the `MixtureDDP` /
+>   `MixtureP0Regression` CI jobs in `.github/workflows/ci.yml`.
+>
+> The smoke tests in `smoke/e3-admission/` run on randomly-initialized (untrained)
+> models; they verify that the routing code runs and produces data, and do not
+> evaluate model quality or trained behavior.
+>
+> **Upstream performance numbers below (42.4% AP @ 1.62 ms, +0.8% mAP vs
+> YOLOv13-N, 17.8% faster, LoRA speed-ups, MoE pruning 20-30% speedup, and the
+> tables in Main Results / Model Zoo) have NOT been independently reproduced in
+> this fork** - this repo contains no evaluation logs for them. In particular, the
+> upstream MoE Pruning (20-30% speedup) claim conflicts with the issue52 pruning
+> results documented in this repo
+> (`reports/issues-52-moe-pruning-dynamic-scheduling.md`: coco128 direct pruning
+> collapses mAP and the quality gate is not passed).
+>
+> Pretrained weights referenced below are upstream release artifacts and are not
+> distributed with this repo. The Quick Start examples previously used a
+> non-existent `yolo_master_n.pt`; they now reference the release weight names.
 <img
   width="224"
   alt="YOLO-Master Mascot"
@@ -167,7 +200,7 @@ YOLO-Master introduces the first deep integration of Mixture-of-Experts into the
 | Component | Description | Implementation |
 |:----------|:-----------|:--------------|
 | **MoE Loss (MoELoss)** | Load balancing loss + Z-Loss for stable training | `ultralytics/nn/modules/moe/loss.py` |
-| **MoE Pruning (MoEPruner)** | Auto-prune low-utilization experts (20-30% speedup) | `ultralytics/nn/modules/moe/pruning.py` |
+| **MoE Pruning (MoEPruner)** | Auto-prune low-utilization experts (20-30% speedup; upstream claim, not independently reproduced in this fork) | `ultralytics/nn/modules/moe/pruning.py` |
 | **Modular Architecture** | Decoupled routers, experts, and gating mechanisms | `ultralytics/nn/modules/moe/` |
 
 **Usage:**
@@ -446,6 +479,11 @@ python agent/scripts/run_yolo_master_skill.py \
 ---
 
 ## 📊 Main Results
+>
+> **Note**: All performance numbers in the tables below (Main Results and Model
+> Zoo) are reported by the upstream paper/release and have not been
+> independently reproduced in this fork. See the fork notice at the top.
+
 ### Detection
 <div align="center">
   <img width="450" alt="Radar chart comparing YOLO models on various datasets" src="https://github.com/user-attachments/assets/743fa632-659b-43b1-accf-f865c8b66754"/>
@@ -640,7 +678,7 @@ Validate the model accuracy on the COCO dataset.
 from ultralytics import YOLO
 
 # Load the pretrained model
-model = YOLO("yolo_master_n.pt")
+model = YOLO("YOLO-Master-EsMoE-N.pt")
 
 # Run validation
 metrics = model.val(data="coco.yaml", save_json=True)
@@ -679,14 +717,14 @@ Run inference on images or videos.
 ```python
 from ultralytics import YOLO
 
-model = YOLO("yolo_master_n.pt")
+model = YOLO("YOLO-Master-EsMoE-N.pt")
 results = model("path/to/image.jpg")
 results[0].show()
 ```
 
 **CLI:**
 ```bash
-yolo predict model=yolo_master_n.pt source='path/to/image.jpg' show=True
+yolo predict model=YOLO-Master-EsMoE-N.pt source='path/to/image.jpg' show=True
 ```
 
 ### Export
@@ -696,7 +734,7 @@ Export the model to other formats for deployment (TensorRT, ONNX, etc.).
 ```python
 from ultralytics import YOLO
 
-model = YOLO("yolo_master_n.pt")
+model = YOLO("YOLO-Master-EsMoE-N.pt")
 model.export(format="engine", half=True)  # Export to TensorRT
 # formats: onnx, openvino, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs
 ```

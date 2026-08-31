@@ -52,7 +52,11 @@ yolo settings datasets_dir=/path/to/datasets
 
 ## 训练命令
 
-以下是本次使用的等价训练命令。脚本默认从 YOLO-Master-v26.02 Release 获取对应官方权重；离线服务器可通过 `--v01-model` 或 `--esmoe-model` 指向已下载的 `.pt` 文件。
+以下是本次使用的等价训练命令。注：当前版本脚本改为从模型 YAML 从头训练
+（见 `scripts/reproduce/_reproduce_common.py`），不再自动下载官方权重，
+`--v01-model` / `--esmoe-model` 参数在当前版本中已不存在；
+`--no-sparse-eval` 是修正 EsMoE-N 稀疏评估的显式开关。本报告所述 120 轮训练
+基于当时版本的脚本完成。
 
 ```bash
 # VisDrone 基线，imgsz=800
@@ -97,6 +101,9 @@ mAP50-95 `0.59125`，与训练末轮记录一致。
 
 完整训练日志、逐 epoch CSV、训练参数、状态文件、图表及离线 W&B 运行包已从远端传回：
 
+> 注：上述归档不随本仓库提交（`artifacts/` 与 `离线日志/` 已在 `.gitignore` 中排除），
+> 本仓库当前也不包含这些文件；SHA-256 仅作记录，审计时需向作者索取归档。
+
 - `artifacts/remote_runs/completed_20260724/m26_yolo_master_results_20260724.tar.gz`
   - SHA-256：`4c3ab7d9b02261c190b70493c6092186ad90f76813b30a2904bd53724f72a182`
 - `artifacts/remote_runs/completed_20260724/m26_yolo_master_final_validations_20260724.tar.gz`
@@ -110,7 +117,7 @@ mAP50-95 `0.59125`，与训练末轮记录一致。
   - SKU-110K EsMoE-N 完整 120 epoch CSV、epoch 120 权重、恢复日志、独立验证和离线 W&B 运行。
   - SHA-256：`8e2f9d9d9cd71af92eb72fe81440b16efa22e6e67a9eab827c9e76e1c52573d1`
 
-本机的 `离线日志/` 含可用的 `offline-run-*` 目录。解压或直接进入对应目录后执行：
+本地工作目录中的 `离线日志/`（不入库）含可用的 `offline-run-*` 目录。解压或直接进入对应目录后执行：
 
 ```bash
 wandb sync /path/to/offline-run-*/
@@ -126,7 +133,7 @@ wandb sync /path/to/offline-run-*/
 
 ## 已知问题与解决方案
 
-- EsMoE-N 在 `top_k == num_experts` 时会错误进入带阈值的稀疏裁剪分支，造成验证近零 mAP。已在 `ES_MOE._sparse_forward()` 修复为与训练一致的稠密计算；VisDrone 复跑已完成并验证恢复正常。
+- EsMoE-N 在 `top_k == num_experts` 时曾错误进入带阈值的稀疏裁剪分支，造成验证近零 mAP。当前代码中该稀疏分支仅在 `top_k < num_experts` 时生效（`ultralytics/nn/modules/moe/modules.py`），复现脚本通过 `--no-sparse-eval` 回调在验证前统一为与训练一致的稠密计算（`scripts/reproduce/_reproduce_common.py`）；VisDrone 复跑已完成并验证恢复正常。注：本报告撰写时引用的 `ES_MOE._sparse_forward()` 方法名在当前版本已不存在，上句按当前实现描述。
 - SKU-110K EsMoE-N 在第 103 轮触发 GPU 2 `CUDA unspecified launch failure`。旧节点随后使 PyTorch 无法初始化任何 CUDA 设备。恢复点迁移到 RTX 5090（32 GB，Driver 580.76.05，PyTorch 2.11.0+cu128）后，使用 `rsync --partial --append-verify` 完整校验数据集，并以 `--resume --device 0` 成功完成剩余 17 轮。
 - 原始验证器缺少 `LOCAL_RANK`、`torch_distributed_zero_first` 导入，并错误调用不存在的 `convert_ndjson_to_yolo_if_needed`。已在 `ultralytics/engine/validator.py` 修复：仅对 `.ndjson` 调用现有转换器。四个 `best.pt` 已独立验证成功。
 - SKU-110K 部分 JPEG 有截断或损坏警告。Ultralytics 会修复或跳过无法读取的样本，日志中保留了这些记录。

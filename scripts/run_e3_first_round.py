@@ -309,6 +309,15 @@ def write_analysis_skeleton(args, exp_dir: Path, run_meta: dict, git: dict, chec
         "（留空：脚本不自动生成结论。）",
         "",
     ]
+    process_log = exp_dir / "PROCESS_LOG.md"
+    if process_log.exists():
+        lines += [
+            "",
+            "## 过程记录",
+            "",
+            "- 手工过程记录见 `PROCESS_LOG.md`（脚本不生成，人工补充）。",
+            "",
+        ]
     (exp_dir / "analysis.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -569,6 +578,7 @@ def main() -> int:
     if not exp_dir.is_relative_to(EXPERIMENTS_DIR.resolve()):
         print(f"ERROR: experiment path escapes experiments/: {exp_dir}", file=sys.stderr)
         return 2
+    preserved_process_log = None
     if exp_dir.exists():
         if not args.force:
             print(
@@ -576,8 +586,13 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+        process_log_candidate = exp_dir / "PROCESS_LOG.md"
+        if process_log_candidate.is_file():
+            preserved_process_log = process_log_candidate.read_bytes()
         shutil.rmtree(exp_dir)
     exp_dir.mkdir(parents=True, exist_ok=True)
+    if preserved_process_log is not None:
+        (exp_dir / "PROCESS_LOG.md").write_bytes(preserved_process_log)
 
     log_path = exp_dir / "stdout.log"
     log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 - kept open for the Tee stream

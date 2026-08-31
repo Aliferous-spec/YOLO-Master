@@ -1,10 +1,10 @@
 experiment:
   name: 002_e3_first_round_moe
-  created_at: '2026-08-31T23:08:08+08:00'
+  created_at: '2026-08-31T23:35:07+08:00'
   status: ok
   command: scripts\run_e3_first_round.py --name 002_e3_first_round_moe --model ultralytics\cfg\models\master\v0_9\det\yolo-master-n.yaml
     --data ultralytics\cfg\datasets\coco8.yaml --split val --imgsz 640 --batch 1 --device
-    cpu --seed 0 --conf 0.001 --iou 0.7 --max-det 300
+    cpu --seed 0 --conf 0.001 --iou 0.7 --max-det 300 --force
 run_parameters:
   model: D:\YOLO-Master\ultralytics\cfg\models\master\v0_9\det\yolo-master-n.yaml
   data: D:\YOLO-Master\ultralytics\cfg\datasets\coco8.yaml
@@ -20,14 +20,16 @@ run_parameters:
   warmup: 0
   repeat: 1
 git:
-  commit: 1c4669f9ee44c1c5e5759d93b49e68ce2531d3b3
+  commit: dca2fe0b9def17a21f67d28379b43e466dce5018
   dirty: true
   dirty_files:
-  - ' M README.md'
-  - ' M README_reproduce.md'
-  - ' M "smoke/e3-admission/E3_\345\207\206\345\205\245\346\243\200\346\237\245_\346\212\200\346\234\257\344\272\247\345\207\272.md"'
-  - ' M smoke/e3-admission/README_CN.md'
-  - ?? scripts/run_e3_first_round.py
+  - ' D experiments/002_e3_first_round_moe/analysis.md'
+  - ' D experiments/002_e3_first_round_moe/baseline.json'
+  - ' D experiments/002_e3_first_round_moe/comparison.json'
+  - ' D experiments/002_e3_first_round_moe/config.yaml'
+  - ' D experiments/002_e3_first_round_moe/e3.json'
+  - ' M scripts/run_e3_first_round.py'
+  - ?? experiments/002_e3_first_round_moe/PROCESS_LOG.md
 checkpoint:
   source: random_init_from_yaml
   path: null

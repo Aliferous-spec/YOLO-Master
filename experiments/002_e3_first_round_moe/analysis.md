@@ -1,8 +1,8 @@
 # 实验记录骨架
 
 - 实验名称: 002_e3_first_round_moe
-- 实验时间: 2026-08-31T23:08:08+08:00
-- git commit: 1c4669f9ee44c1c5e5759d93b49e68ce2531d3b3
+- 实验时间: 2026-08-31T23:35:07+08:00
+- git commit: dca2fe0b9def17a21f67d28379b43e466dce5018
 - git dirty: True
 - checkpoint: random_init_from_yaml (sha256: a90ea997903241cf6e837520e6fcaf0ba9159e96ae894b67624b556dd5574267)
 - dataset: ultralytics\cfg\datasets\coco8.yaml
@@ -34,3 +34,8 @@
 ## 备注
 
 （留空：脚本不自动生成结论。）
+
+
+## 过程记录
+
+- 手工过程记录见 `PROCESS_LOG.md`（脚本不生成，人工补充）。
